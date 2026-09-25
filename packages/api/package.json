@@ -1,0 +1,20 @@
+{
+  "name": "@voice-agent/api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/app.ts",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@voice-agent/shared-types": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "tsx": "^4.19.2",
+    "@types/node": "^22.10.2"
+  }
+}

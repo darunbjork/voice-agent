@@ -1,0 +1,20 @@
+{
+  "name": "@voice-agent/web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@voice-agent/shared-types": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "@types/node": "^22.10.2"
+  }
+}
