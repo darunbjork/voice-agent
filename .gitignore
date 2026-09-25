@@ -8,3 +8,4 @@ coverage
 .DS_Store
 json-schema-untrusted.md
 docs/day-*.md
+docs/ruleset-setup.md
