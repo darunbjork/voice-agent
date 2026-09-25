@@ -1,20 +1,95 @@
-import {
-  SHARED_TYPES_VERSION,
-  type HealthStatus,
-  type IntentType,
-  type ClientAudioMessage,
-} from "@voice-agent/shared-types";
+import Fastify, { type FastifyInstance } from "fastify";
+import fastifyHelmet from "@fastify/helmet";
+import fastifyCors from "@fastify/cors";
+import fastifyCookie from "@fastify/cookie";
+import fastifyCsrf from "@fastify/csrf-protection";
+import fastifyRateLimit from "@fastify/rate-limit";
+import fastifyWebsocket from "@fastify/websocket";
+import fastifySwagger from "@fastify/swagger";
+import fastifySwaggerUi from "@fastify/swagger-ui";
 
-const status: HealthStatus = "ok";
-const exampleIntent: IntentType = "help";
+import { env } from "./env.js";
+import { correlationIdHook } from "./middleware/correlation-id.js";
+import { healthRoutes } from "./modules/health/health.routes.js";
 
-const exampleMessage: ClientAudioMessage = {
-  type: "text_input",
-  text: "What can you do?",
-};
+export async function buildApp(): Promise<FastifyInstance> {
+  const app = Fastify({
+    logger:
+      env.NODE_ENV === "development"
+        ? {
+            level: "debug",
+            transport: {
+              target: "pino-pretty",
+              options: { colorize: true },
+            },
+          }
+        : { level: env.NODE_ENV === "production" ? "info" : "debug" },
+    trustProxy: true,
+  });
 
-console.log(`[api] shared-types version: ${SHARED_TYPES_VERSION}`);
-console.log(`[api] health status: ${status}`);
-console.log(`[api] example intent: ${exampleIntent}`);
-console.log(`[api] example client message type: ${exampleMessage.type}`);
-console.log("[api] shared types ready. Waiting for Fastify bootstrap.");
+  await app.register(fastifyHelmet, {
+    global: true,
+    contentSecurityPolicy: false,
+  });
+
+  await app.register(fastifyCors, {
+    origin: env.FRONTEND_URL,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  });
+
+  await app.register(fastifyCookie, {
+    secret: env.JWT_SECRET,
+  });
+
+  await app.register(fastifyCsrf, {
+    cookieOpts: { signed: true },
+  });
+
+  await app.register(fastifyRateLimit, {
+    max: 200,
+    timeWindow: "1 minute",
+  });
+
+  await app.register(fastifyWebsocket);
+
+  await app.register(fastifySwagger, {
+    openapi: {
+      info: {
+        title: "Voice Agent API",
+        description: "Production voice agent – Darun Mustafa",
+        version: "0.1.0",
+      },
+      servers: [{ url: `http://localhost:${env.PORT}` }],
+    },
+  });
+
+  await app.register(fastifySwaggerUi, {
+    routePrefix: "/docs",
+  });
+
+  app.addHook("onRequest", correlationIdHook);
+
+  await app.register(healthRoutes);
+
+  return app;
+}
+
+async function start(): Promise<void> {
+  const app = await buildApp();
+
+  try {
+    await app.listen({ port: env.PORT, host: "0.0.0.0" });
+    app.log.info(`Voice Agent API listening on http://localhost:${env.PORT}`);
+    app.log.info(`Swagger UI → http://localhost:${env.PORT}/docs`);
+    app.log.info(`Health     → http://localhost:${env.PORT}/health`);
+    app.log.info(`VOICE_MOCK = ${env.VOICE_MOCK}`);
+  } catch (err) {
+    app.log.error(err);
+    process.exit(1);
+  }
+}
+
+if (process.env.NODE_ENV !== "test") {
+  void start();
+}
