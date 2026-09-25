@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import fastifyHelmet from "@fastify/helmet";
 import fastifyCors from "@fastify/cors";
 import fastifyCookie from "@fastify/cookie";
@@ -11,6 +11,8 @@ import fastifySwaggerUi from "@fastify/swagger-ui";
 import { env } from "./env.js";
 import { correlationIdHook } from "./middleware/correlation-id.js";
 import { healthRoutes } from "./modules/health/health.routes.js";
+import { agentRoutes } from "./modules/agent/agent.routes.js";
+import { BudgetExceededError } from "./utils/token-budget.js";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -70,7 +72,36 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   app.addHook("onRequest", correlationIdHook);
 
+  app.setErrorHandler<FastifyError>(async (err, request, reply) => {
+    if (err instanceof BudgetExceededError) {
+      await reply
+        .status(429)
+        .header("Retry-After", "3600")
+        .send({
+          error: "budget_exceeded",
+          message: err.message,
+          correlationId: request.correlationId,
+        });
+      return;
+    }
+    if (err.validation !== undefined) {
+      await reply.status(400).send({
+        error: "validation_error",
+        message: err.message,
+        correlationId: request.correlationId,
+      });
+      return;
+    }
+    request.log.error({ err }, "unhandled error");
+    await reply.status(500).send({
+      error: "internal",
+      message: "Internal server error",
+      correlationId: request.correlationId,
+    });
+  });
+
   await app.register(healthRoutes);
+  await app.register(agentRoutes);
 
   return app;
 }

@@ -13,6 +13,12 @@ Every issue is tagged with the day it was hit. Constraints are binding for every
 | [ISSUE-005](#issue-005--allowlist-on-rate-limit-hides-localhost) | **Day 3** | `allowList` on rate-limit hides localhost |
 | [ISSUE-006](#issue-006--server-must-not-auto-start-under-test) | **Day 3** | server must not auto-start under test |
 | [ISSUE-007](#issue-007--no-appdecorateconfig-env-day-6-scope) | **Day 3** | no `app.decorate("config", env)` (Day 6 scope) |
+| [ISSUE-009](#issue-009--geminiagentoutput-missing-from-shared-types) | **Day 4** | `GeminiAgentOutput` missing from shared-types |
+| [ISSUE-010](#issue-010--inline-as----on-requestbody) | **Day 4** | Inline `as { ... }` on `request.body` |
+| [ISSUE-011](#issue-011--dynamic-await-import-inside-fastify-register) | **Day 4** | Dynamic `await import()` inside Fastify register |
+| [ISSUE-012](#issue-012--usage-tracker-read-modify-write-race) | **Day 4** | usage-tracker read-modify-write race |
+| [ISSUE-013](#issue-013--additionalproperties-true-on-reply-response-schema) | **Day 4** | `additionalProperties: true` on reply response schema |
+| [ISSUE-014](#issue-014--custom-error-handler-returned-500-for-schema-validation-failures) | **Day 4** | Custom error handler returned 500 for schema validation failures |
 
 ---
 
@@ -122,6 +128,102 @@ if (process.env.NODE_ENV !== "test") {
 **Symptom:** decorating the Fastify instance with the env object couples every route to a global mutable surface before the config layer exists.
 
 **Solution:** do nothing — modules import `env` from `../env.js` directly. The decorator pattern is explicitly deferred to Day 6. **Rule:** no `app.decorate("config", …)` until Day 6 says so.
+
+---
+
+## Day 4 — Cost controls (`packages/api` + `docs/cost.md`)
+
+### ISSUE-009 — `GeminiAgentOutput` missing from shared-types
+
+**Day:** 4 · Cost controls
+**Status:** FIXED (Day 4)
+**Discovered:** Day 4 plan review
+**Symptom:** `TS2305: Module '"@voice-agent/shared-types"' has no
+exported member 'GeminiAgentOutput'` in `voice-mock.ts`.
+**Root cause:** The bootcamp spec listed `AgentReply` and
+`LatencyBreakdown` but not the literal Gemini output contract.
+**Resolution:** Added `GeminiAgentOutput = { reply; intent; card }`
+to `packages/shared-types/src/agent.types.ts` and re-exported it.
+This is the locked contract the real Gemini call must satisfy on
+Day 16.
+**Do not** re-introduce a local type for this shape.
+
+---
+
+### ISSUE-010 — Inline `as { ... }` on `request.body`
+
+**Day:** 4 · Cost controls
+**Status:** FIXED (Day 4)
+**Symptom:** Readability + uniformity. AGENTS.md asks for explicit
+interfaces over inline shapes.
+**Resolution:** Every route defines a named interface for its body
+(`TextAgentBody`, `TextAgentResponse`, `HealthResponse`). Cast once
+via `app.post<{ Body: T }>(...)`. No inline `as { a: T; b: T }`.
+**Enforcement:** `grep -rn "as {" packages/api/src/` must return
+empty on every day going forward.
+
+---
+
+### ISSUE-011 — Dynamic `await import()` inside Fastify register
+
+**Day:** 4 · Cost controls
+**Status:** FIXED (Day 4)
+**Symptom:** Boot path had an unnecessary await point between plugin
+registration and route registration.
+**Root cause:** Draft used `const { agentRoutes } = await import(...)`
+for no documented circular-dependency reason.
+**Resolution:** Static top-level imports in `app.ts`. No
+`await import()` in the boot path.
+**Enforcement:** `grep -rn "await import(" packages/api/src/` must
+return empty on every day going forward.
+
+---
+
+### ISSUE-012 — usage-tracker read-modify-write race
+
+**Day:** 4 · Cost controls
+**Status:** FIXED for Day 4 (in-memory). REDESIGN on Day 5.
+**Symptom:** Concurrent POSTs to `/api/v1/agent/text` can lose token
+increments because `await getDailyUsage()` yielded control between
+read and write.
+**Day 4 fix:** `incrementUsage` is **synchronous**. No awaits between
+read and write. Tested with two sequential POSTs; `dailyTokens`
+reflects both.
+**Day 5 fix:** Replace the in-memory `Map` with Redis `INCRBY`
+(atomic, cross-replica, TTL-scoped by date). File as **ISSUE-012b**
+when it lands.
+
+---
+
+### ISSUE-013 — `additionalProperties: true` on reply response schema
+
+**Day:** 4 · Cost controls
+**Status:** OPEN — Day 16 cleanup
+**Blocks:** nothing today (mock-only endpoint)
+**Planned:** When the real Gemini path lands (Day 16), the response
+schema gets the full `AgentReply` shape so Fastify's fast serializer
+is used. Today's mock keeps the loose schema on purpose — locking a
+shape we haven't finalized would be premature.
+**Tracking:** revisit on Day 16 PR.
+
+---
+
+### ISSUE-014 — Custom error handler returned 500 for schema validation failures
+
+**Day:** 4 · Cost controls
+**Status:** FIXED (Day 4)
+**Symptom:** `POST /api/v1/agent/text` with a body missing `text`
+returned **500 internal** instead of **400**.
+**Root cause:** The custom `app.setErrorHandler` from the Day 4 plan
+replaced Fastify's default handler, which is what maps
+`error.validation` (FST_ERR_VALIDATION) to status 400. The fallback
+branch sent 500 for every non-budget error.
+**Resolution:** The handler now checks `err.validation !== undefined`
+first and responds 400 `{ error: "validation_error", message,
+correlationId }`. The handler is typed `setErrorHandler<FastifyError>`
+because Fastify 5 defaults the error parameter to `unknown`.
+**Enforcement:** any new route with a body schema must return 400 on
+an invalid payload — a 500 means this branch was lost.
 
 ---
 
