@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@voice-agent/shared-types": "workspace:*",
+    "gsap": "^3.12.5",
     "react": "^19",
     "react-dom": "^19"
   },
