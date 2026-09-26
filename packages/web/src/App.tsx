@@ -85,11 +85,7 @@ export function App() {
       <p>Hardened WebSocket proxy + reconnect + typed event routing</p>
 
       <div style={{ display: "flex", gap: "1rem", margin: "1.5rem 0" }}>
-        <button
-          onClick={handleStart}
-          disabled={capture.isCapturing}
-          style={btnStyle}
-        >
+        <button onClick={handleStart} disabled={capture.isCapturing} style={btnStyle}>
           Start Mic
         </button>
         <button
@@ -111,12 +107,8 @@ export function App() {
             <strong>Session:</strong> {proxy.sessionId.slice(0, 8)}…
           </>
         )}
-        {proxy.lastError && (
-          <span style={{ color: "#ef4444" }}> — {proxy.lastError}</span>
-        )}
-        {capture.error && (
-          <span style={{ color: "#ef4444" }}> — {capture.error}</span>
-        )}
+        {proxy.lastError && <span style={{ color: "#ef4444" }}> — {proxy.lastError}</span>}
+        {capture.error && <span style={{ color: "#ef4444" }}> — {capture.error}</span>}
       </div>
 
       <div
@@ -149,21 +141,13 @@ export function App() {
           minHeight: 72,
         }}
       >
-        <div style={{ color: "#64748b", fontSize: 12, marginBottom: 4 }}>
-          Live transcript
-        </div>
+        <div style={{ color: "#64748b", fontSize: 12, marginBottom: 4 }}>Live transcript</div>
         <div style={{ fontSize: 18 }}>
-          {finalText && (
-            <span style={{ color: "#e2e8f0" }}>{finalText}</span>
-          )}
+          {finalText && <span style={{ color: "#e2e8f0" }}>{finalText}</span>}
           {interim && (
-            <span style={{ color: "#a78bfa", marginLeft: finalText ? 8 : 0 }}>
-              {interim}
-            </span>
+            <span style={{ color: "#a78bfa", marginLeft: finalText ? 8 : 0 }}>{interim}</span>
           )}
-          {!finalText && !interim && (
-            <span style={{ color: "#64748b" }}>…</span>
-          )}
+          {!finalText && !interim && <span style={{ color: "#64748b" }}>…</span>}
         </div>
       </div>
 

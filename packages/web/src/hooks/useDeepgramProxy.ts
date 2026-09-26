@@ -1,24 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  ClientAudioMessage,
-  ServerAudioMessage,
-} from "@voice-agent/shared-types";
+import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared-types";
 
-export type ProxyStatus =
-  | "disconnected"
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "error";
+export type ProxyStatus = "disconnected" | "connecting" | "connected" | "reconnecting" | "error";
 
 export type TranscriptHandlers = {
   onSessionId?: (sessionId: string) => void;
   onInterim?: (text: string) => void;
   onFinal?: (text: string, latencyMs: number) => void;
   onAgentThinking?: () => void;
-  onAgentResponse?: (
-    msg: Extract<ServerAudioMessage, { type: "agent_response" }>,
-  ) => void;
+  onAgentResponse?: (msg: Extract<ServerAudioMessage, { type: "agent_response" }>) => void;
   onTtsChunk?: (audio: ArrayBuffer, sequenceNum: number) => void;
   onTtsDone?: () => void;
   onError?: (code: string, message: string) => void;
