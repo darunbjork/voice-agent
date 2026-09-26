@@ -4,6 +4,9 @@ import { useAudioCapture } from "./hooks/useAudioCapture.js";
 import { useDeepgramProxy } from "./hooks/useDeepgramProxy.js";
 import { useVAD } from "./hooks/useVAD.js";
 import { useTTSPlayer } from "./hooks/useTTSPlayer.js";
+import { useBargeIn } from "./hooks/useBargeIn.js";
+
+const VAD_MIN_SPEECH_MS = 100;
 
 export function App() {
   const [log, setLog] = useState<string[]>([]);
@@ -23,9 +26,7 @@ export function App() {
   const proxy = useDeepgramProxy({
     handlers: {
       onSessionId: (id) => appendLog(`session_id → ${id}`),
-      onInterim: (text) => {
-        setInterim(text);
-      },
+      onInterim: (text) => setInterim(text),
       onFinal: (text, latencyMs) => {
         setFinalText(text);
         setInterim("");
@@ -59,25 +60,27 @@ export function App() {
     },
   });
 
-  const handleSpeechStart = useCallback(() => {
-    appendLog("VAD → speech_start");
-    if (tts.isPlaying) {
-      tts.cancel();
-      proxy.sendMessage({ type: "barge_in" });
-      appendLog("barge_in sent");
-    }
-  }, [appendLog, tts, proxy]);
-
-  const handleSpeechEnd = useCallback(() => {
-    appendLog("VAD → speech_end (500 ms silence)");
-  }, [appendLog]);
-
   const vad = useVAD({
     threshold: 0.02,
-    minSpeechMs: 150,
+    minSpeechMs: VAD_MIN_SPEECH_MS,
     silenceDurationMs: 500,
-    onSpeechStart: handleSpeechStart,
-    onSpeechEnd: handleSpeechEnd,
+    onSpeechStart: () => appendLog("VAD → speech_start"),
+    onSpeechEnd: () => appendLog("VAD → speech_end (500 ms silence)"),
+  });
+
+  const bargeIn = useBargeIn({
+    isTtsPlaying: tts.isPlaying,
+    isUserSpeaking: vad.state === "speech",
+    cancelTts: tts.cancel,
+    sendBargeIn: () => proxy.sendMessage({ type: "barge_in" }),
+    minSpeechMs: 0,
+    cooldownMs: 400,
+    onBargeIn: (localWorkMs) => {
+      const totalMs = VAD_MIN_SPEECH_MS + localWorkMs;
+      appendLog(
+        `BARGE-IN fired — VAD ${VAD_MIN_SPEECH_MS} ms + local ${localWorkMs.toFixed(1)} ms ≈ ${totalMs.toFixed(1)} ms total`,
+      );
+    },
   });
 
   const capture = useAudioCapture({
@@ -100,7 +103,7 @@ export function App() {
     appendLog("stopped");
   };
 
-  const handleInterrupt = () => {
+  const handleManualBarge = () => {
     tts.cancel();
     proxy.sendMessage({ type: "barge_in" });
     appendLog("manual barge_in");
@@ -119,8 +122,15 @@ export function App() {
   };
 
   const vadIsSpeaking = vad.state === "speech";
+  const bargeActive = bargeIn.isTriggered || bargeIn.status === "cooldown";
 
-  const vadColor = vadIsSpeaking ? "#22c55e" : tts.isPlaying ? "#a78bfa" : "#64748b";
+  const statusColor = bargeActive
+    ? "#ef4444"
+    : vadIsSpeaking
+      ? "#22c55e"
+      : tts.isPlaying
+        ? "#a78bfa"
+        : "#64748b";
 
   return (
     <div
@@ -133,10 +143,17 @@ export function App() {
         maxWidth: 720,
       }}
     >
-      <h1 style={{ marginTop: 0 }}>Voice Agent — Day 12</h1>
-      <p>TTS player — gapless PCM playback + cancel support</p>
+      <h1 style={{ marginTop: 0 }}>Voice Agent — Day 13</h1>
+      <p>Barge-in — interrupt agent speech in &lt; 200 ms</p>
 
-      <div style={{ display: "flex", gap: "1rem", margin: "1.5rem 0" }}>
+      <div
+        style={{
+          display: "flex",
+          gap: "1rem",
+          margin: "1.5rem 0",
+          flexWrap: "wrap",
+        }}
+      >
         <button onClick={handleStart} disabled={capture.isCapturing} style={btnStyle}>
           Start Mic
         </button>
@@ -148,7 +165,7 @@ export function App() {
           Stop
         </button>
         <button
-          onClick={handleInterrupt}
+          onClick={handleManualBarge}
           disabled={!tts.isPlaying}
           style={{ ...btnStyle, background: "#ef4444" }}
         >
@@ -161,9 +178,18 @@ export function App() {
         {"  |  "}
         <strong>Proxy:</strong> {proxy.status}
         {"  |  "}
-        <strong style={{ color: vadColor }}>VAD: {vad.state}</strong>
+        <strong style={{ color: statusColor }}>VAD: {vad.state}</strong>
         {"  |  "}
         <strong style={{ color: tts.isPlaying ? "#a78bfa" : "#64748b" }}>TTS: {tts.status}</strong>
+        {"  |  "}
+        <strong
+          style={{
+            color: bargeIn.isArmed ? "#f59e0b" : bargeActive ? "#ef4444" : "#64748b",
+          }}
+        >
+          Barge: {bargeIn.status}
+          {bargeIn.lastLocalWorkMs !== null && ` (local ${bargeIn.lastLocalWorkMs.toFixed(1)} ms)`}
+        </strong>
         {capture.error && <span style={{ color: "#ef4444" }}> — {capture.error}</span>}
         {proxy.lastError && <span style={{ color: "#ef4444" }}> — {proxy.lastError}</span>}
         {tts.error && <span style={{ color: "#ef4444" }}> — {tts.error}</span>}
@@ -183,7 +209,7 @@ export function App() {
           style={{
             height: "100%",
             width: `${Math.min(100, capture.level * 400)}%`,
-            background: vadIsSpeaking ? "#22c55e" : tts.isPlaying ? "#a78bfa" : "#7c3aed",
+            background: statusColor,
             transition: "width 50ms linear, background 150ms",
           }}
         />
@@ -200,7 +226,14 @@ export function App() {
         }}
       >
         <div style={{ color: "#64748b", fontSize: 12, marginBottom: 4 }}>
-          Live transcript {vadIsSpeaking ? "(speaking…)" : tts.isPlaying ? "(agent speaking)" : ""}
+          Live transcript{" "}
+          {bargeActive
+            ? "(interrupted)"
+            : vadIsSpeaking
+              ? "(speaking…)"
+              : tts.isPlaying
+                ? "(agent speaking)"
+                : ""}
         </div>
         <div style={{ fontSize: 18 }}>
           {finalText && <span style={{ color: "#e2e8f0" }}>{finalText}</span>}
@@ -229,7 +262,7 @@ export function App() {
       <form onSubmit={handleTextSubmit} style={{ marginBottom: "1.5rem" }}>
         <input
           name="text"
-          placeholder="Type a message to hear TTS…"
+          placeholder="Type to trigger TTS, then speak to barge-in…"
           style={{
             width: "100%",
             padding: "0.75rem 1rem",
