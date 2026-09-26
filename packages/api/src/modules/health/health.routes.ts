@@ -1,6 +1,3 @@
-// packages/api/src/modules/health/health.routes.ts
-// RULE 8: Every Fastify route must have complete JSON Schema.
-
 import type { FastifyInstance, FastifyPluginOptions } from "fastify";
 import { env } from "../../env.js";
 import { getDailyUsage } from "../../utils/usage-tracker.js";
@@ -52,18 +49,40 @@ export async function healthRoutes(
       schema: {
         description: "Liveness + readiness + cost snapshot",
         tags: ["health"],
-        response: {
-          200: healthResponseSchema,
-        },
+        response: { 200: healthResponseSchema },
       },
     },
     async (request): Promise<HealthResponse> => {
-      const db: "ok" | "not_configured" = env.DATABASE_URL ? "ok" : "not_configured";
-      const redis: "ok" | "not_configured" = env.REDIS_URL ? "ok" : "not_configured";
-      const usage = getDailyUsage();
+      let db: HealthResponse["db"] = "not_configured";
+      let redis: HealthResponse["redis"] = "not_configured";
+
+      try {
+        await app.prisma.$queryRaw`SELECT 1`;
+        db = "ok";
+      } catch {
+        db = "down";
+      }
+
+      if (app.redis !== undefined) {
+        try {
+          const pong = await app.redis.ping();
+          redis = pong === "PONG" ? "ok" : "down";
+        } catch {
+          redis = "down";
+        }
+      }
+
+      const usage = await getDailyUsage();
+
+      const status: HealthResponse["status"] =
+        db === "ok" && redis === "ok"
+          ? "ok"
+          : db === "down" || redis === "down"
+            ? "down"
+            : "degraded";
 
       return {
-        status: db === "ok" && redis === "ok" ? "ok" : "degraded",
+        status,
         db,
         redis,
         voiceMock: env.VOICE_MOCK,

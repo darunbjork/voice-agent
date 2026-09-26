@@ -1,50 +1,84 @@
-// packages/api/src/utils/usage-tracker.ts
-// Daily usage counter. In-memory for Day 4; documented swap to Redis on Day 5.
+import type { createClient } from "redis";
 
 import { DAILY_MAX_TOKENS } from "./token-budget.js";
 
+type AppRedisClient = ReturnType<typeof createClient>;
+
 export type UsageSnapshot = {
-  date: string; // YYYY-MM-DD
+  date: string;
   tokens: number;
   ttsChars: number;
   sttSeconds: number;
 };
 
 const memoryStore = new Map<string, UsageSnapshot>();
+let boundRedis: AppRedisClient | null = null;
+
+export function bindRedis(client: AppRedisClient): void {
+  boundRedis = client;
+}
 
 function todayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function getDailyUsage(): UsageSnapshot {
-  const key = todayKey();
-  return memoryStore.get(key) ?? {
-    date: key,
-    tokens: 0,
-    ttsChars: 0,
-    sttSeconds: 0,
-  };
+function redisKey(date: string): string {
+  return `voice:usage:${date}`;
 }
 
-// TODO(Day 5): Redis INCRBY — atomic, cross-replica.
-// Today's in-memory store loses writes across replicas and would
-// lose writes across concurrent awaits if this were async. It isn't.
-export function incrementUsage(delta: {
+function emptySnapshot(date: string): UsageSnapshot {
+  return { date, tokens: 0, ttsChars: 0, sttSeconds: 0 };
+}
+
+export async function getDailyUsage(): Promise<UsageSnapshot> {
+  const date = todayKey();
+
+  if (boundRedis !== null) {
+    const raw = await boundRedis.hGetAll(redisKey(date));
+    if (raw !== null && Object.keys(raw).length > 0) {
+      return {
+        date,
+        tokens: Number(raw.tokens ?? 0),
+        ttsChars: Number(raw.ttsChars ?? 0),
+        sttSeconds: Number(raw.sttSeconds ?? 0),
+      };
+    }
+  }
+
+  return memoryStore.get(date) ?? emptySnapshot(date);
+}
+
+export async function incrementUsage(delta: {
   tokens?: number;
   ttsChars?: number;
   sttSeconds?: number;
-}): UsageSnapshot {
-  const current = getDailyUsage();
+}): Promise<UsageSnapshot> {
+  const date = todayKey();
+
+  if (boundRedis !== null) {
+    const key = redisKey(date);
+    await boundRedis
+      .multi()
+      .hIncrBy(key, "tokens", delta.tokens ?? 0)
+      .hIncrBy(key, "ttsChars", delta.ttsChars ?? 0)
+      .hIncrBy(key, "sttSeconds", delta.sttSeconds ?? 0)
+      .expire(key, 172800)
+      .exec();
+    return getDailyUsage();
+  }
+
+  const current = memoryStore.get(date) ?? emptySnapshot(date);
   const updated: UsageSnapshot = {
-    date: current.date,
+    date,
     tokens: current.tokens + (delta.tokens ?? 0),
     ttsChars: current.ttsChars + (delta.ttsChars ?? 0),
     sttSeconds: current.sttSeconds + (delta.sttSeconds ?? 0),
   };
-  memoryStore.set(current.date, updated);
+  memoryStore.set(date, updated);
   return updated;
 }
 
-export function isApproachingDailyLimit(): boolean {
-  return getDailyUsage().tokens >= DAILY_MAX_TOKENS * 0.8;
+export async function isApproachingDailyLimit(): Promise<boolean> {
+  const usage = await getDailyUsage();
+  return usage.tokens >= DAILY_MAX_TOKENS * 0.8;
 }

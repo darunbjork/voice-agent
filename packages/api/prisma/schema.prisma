@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("admins")
+}
+
+model VoiceSession {
+  id          String             @id @default(cuid())
+  startedAt   DateTime           @default(now())
+  endedAt     DateTime?
+  turnCount   Int                @default(0)
+  totalTokens Int                @default(0)
+  language    String             @default("en")
+  turns       ConversationTurn[]
+
+  @@map("voice_sessions")
+}
+
+model ConversationTurn {
+  id             String       @id @default(cuid())
+  sessionId      String
+  session        VoiceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  turnIndex      Int
+  userTranscript String
+  agentReply     String
+  intentType     String
+  cardType       String?
+  sttLatencyMs   Int?
+  llmLatencyMs   Int?
+  ttsLatencyMs   Int?
+  totalLatencyMs Int?
+  tokenCount     Int          @default(0)
+  createdAt      DateTime     @default(now())
+
+  @@index([sessionId])
+  @@map("conversation_turns")
+}
+
+model DailyUsage {
+  id         String   @id @default(cuid())
+  date       String
+  tokens     Int      @default(0)
+  ttsChars   Int      @default(0)
+  sttSeconds Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([date])
+  @@map("daily_usage")
+}

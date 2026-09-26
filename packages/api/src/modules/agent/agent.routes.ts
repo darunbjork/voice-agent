@@ -1,6 +1,3 @@
-// packages/api/src/modules/agent/agent.routes.ts
-// Text-only agent endpoint. VOICE_MOCK=true path only — no provider calls.
-
 import type { FastifyInstance, FastifyPluginOptions } from "fastify";
 import { env } from "../../env.js";
 import { costGuard } from "../../middleware/cost.guard.js";
@@ -49,8 +46,6 @@ export async function agentRoutes(
           200: {
             type: "object",
             properties: {
-              // ISSUE-013: loose schema intentional for Day 4 mock.
-              // Tightened to full AgentReply shape on Day 16.
               reply: { type: "object", additionalProperties: true },
               mock: { type: "boolean" },
             },
@@ -80,7 +75,7 @@ export async function agentRoutes(
           : "fallback";
 
       const reply = mockAgentReply(sessionId, 1, intent);
-      incrementUsage({ tokens: estimated });
+      await incrementUsage({ tokens: estimated });
 
       return { reply, mock: env.VOICE_MOCK };
     },

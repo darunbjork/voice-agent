@@ -1,7 +1,3 @@
-// packages/api/src/utils/voice-mock.ts
-// Deterministic mocks for the VOICE_MOCK=true path (docs/cost.md, Section 4).
-// Zero network calls — fixed fixtures only.
-
 import type {
   AgentReply,
   GeminiAgentOutput,
@@ -122,7 +118,6 @@ export function mockTtsChunk(sequenceNum: number): {
   audio: ArrayBuffer;
   sequenceNum: number;
 } {
-  // Canonical 44-byte WAV header: 16-bit mono PCM, 16 kHz, 0-length data chunk.
   const header = new Uint8Array([
     0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00,
     0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20,
