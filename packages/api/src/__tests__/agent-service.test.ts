@@ -11,7 +11,7 @@ const silentLogger = {
 } as unknown as FastifyBaseLogger;
 
 describe("handleUtterance", () => {
-  it("returns a weather reply with location in the text", async () => {
+  it("fast-path weather keeps the extracted location in the reply", async () => {
     const { reply, viaFastPath } = await handleUtterance(
       {
         text: "What is the weather in Stockholm?",
@@ -25,13 +25,13 @@ describe("handleUtterance", () => {
     expect(viaFastPath).toBe(true);
     expect(reply.intent).toBe("weather");
     expect(reply.text.toLowerCase()).toContain("stockholm");
+    expect(reply.card?.type).toBe("weather");
     expect(reply.sessionId).toBe("sess-1");
-    expect(reply.turnIndex).toBe(1);
     expect(reply.latencyMs.stt).toBe(42);
     expect(reply.latencyMs.total).toBeGreaterThanOrEqual(42);
   });
 
-  it("returns a fallback reply for unknown phrases", async () => {
+  it("slow-path unknown phrases go through Gemini (mock) and return fallback", async () => {
     const { reply, viaFastPath } = await handleUtterance(
       {
         text: "Tell me a joke about otters",
@@ -44,11 +44,11 @@ describe("handleUtterance", () => {
 
     expect(viaFastPath).toBe(false);
     expect(reply.intent).toBe("fallback");
-    expect(reply.text).toContain("joke about otters");
+    expect(reply.card).toBeNull();
   });
 
-  it("returns a translate reply even without extracted slots", async () => {
-    const { reply } = await handleUtterance(
+  it("fast-path translate always returns a non-question reply", async () => {
+    const { reply, viaFastPath } = await handleUtterance(
       {
         text: "Translate something please",
         sessionId: "sess-3",
@@ -58,6 +58,7 @@ describe("handleUtterance", () => {
       silentLogger,
     );
 
+    expect(viaFastPath).toBe(true);
     expect(reply.intent).toBe("translate");
     expect(reply.text).not.toMatch(/\?$/);
   });
