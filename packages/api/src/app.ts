@@ -15,6 +15,7 @@ import { agentRoutes } from "./modules/agent/agent.routes.js";
 import { BudgetExceededError } from "./utils/token-budget.js";
 import prismaPlugin from "./plugins/prisma.plugin.js";
 import redisPlugin from "./plugins/redis.plugin.js";
+import { audioRoutes } from "./modules/audio/audio.routes.js";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -107,6 +108,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   await app.register(healthRoutes);
   await app.register(agentRoutes);
+  await app.register(audioRoutes);
 
   return app;
 }
