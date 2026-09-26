@@ -23,12 +23,20 @@ export type AudioCaptureControls = {
 
 export type UseAudioCaptureOptions = {
   onChunk: (chunk: ArrayBuffer) => void;
+  /**
+   * Called with the current RMS (0..1) on every audio frame.
+   * Bypasses React state so VAD and meters can consume audio-rate
+   * samples without triggering a re-render per frame.
+   */
+  onRms?: (rms: number) => void;
 };
 
 export function useAudioCapture(
   options: UseAudioCaptureOptions,
 ): AudioCaptureState & AudioCaptureControls {
-  const { onChunk } = options;
+  const { onChunk, onRms } = options;
+  const onRmsRef = useRef(onRms);
+  onRmsRef.current = onRms;
 
   const [status, setStatus] = useState<CaptureStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -102,6 +110,7 @@ export function useAudioCapture(
         const input = event.inputBuffer.getChannelData(0);
         const rms = computeRms(input);
         setLevel(rms);
+        onRmsRef.current?.(rms);
 
         let samples: Float32Array;
         if (Math.abs(ratio - 1) < 0.01) {

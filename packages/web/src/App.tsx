@@ -2,11 +2,13 @@ import { useCallback, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import { useAudioCapture } from "./hooks/useAudioCapture.js";
 import { useDeepgramProxy } from "./hooks/useDeepgramProxy.js";
+import { useVAD } from "./hooks/useVAD.js";
 
 export function App() {
   const [log, setLog] = useState<string[]>([]);
   const [interim, setInterim] = useState("");
   const [finalText, setFinalText] = useState("");
+  const [utterances, setUtterances] = useState<string[]>([]);
 
   const appendLog = useCallback((line: string) => {
     setLog((prev) => [line, ...prev].slice(0, 40));
@@ -17,12 +19,12 @@ export function App() {
       onSessionId: (id) => appendLog(`session_id → ${id}`),
       onInterim: (text) => {
         setInterim(text);
-        appendLog(`interim → ${text}`);
       },
       onFinal: (text, latencyMs) => {
         setFinalText(text);
         setInterim("");
-        appendLog(`FINAL → ${text} (${latencyMs} ms)`);
+        setUtterances((prev) => [text, ...prev].slice(0, 10));
+        appendLog(`FINAL utterance → "${text}" (${latencyMs} ms)`);
       },
       onError: (code, message) => {
         appendLog(`error → ${code}: ${message}`);
@@ -40,10 +42,17 @@ export function App() {
     },
   });
 
+  const vad = useVAD({
+    threshold: 0.02,
+    minSpeechMs: 150,
+    silenceDurationMs: 500,
+    onSpeechStart: () => appendLog("VAD → speech_start"),
+    onSpeechEnd: () => appendLog("VAD → speech_end (500 ms silence)"),
+  });
+
   const capture = useAudioCapture({
-    onChunk: (chunk) => {
-      proxy.sendAudio(chunk);
-    },
+    onChunk: (chunk) => proxy.sendAudio(chunk),
+    onRms: (rms) => vad.feed(rms),
   });
 
   const handleStart = async () => {
@@ -55,6 +64,7 @@ export function App() {
   const handleStop = () => {
     capture.stop();
     proxy.disconnect();
+    vad.reset();
     setInterim("");
     appendLog("stopped");
   };
@@ -70,6 +80,8 @@ export function App() {
     appendLog(`text_input → ${text}`);
   };
 
+  const vadColor = vad.state === "speech" ? "#22c55e" : capture.isCapturing ? "#a78bfa" : "#64748b";
+
   return (
     <div
       style={{
@@ -82,7 +94,7 @@ export function App() {
       }}
     >
       <h1 style={{ marginTop: 0 }}>Voice Agent</h1>
-      <p>Hardened WebSocket proxy + reconnect + typed event routing</p>
+      <p>Client-side VAD: 500 ms endpointing, finals-only utterances</p>
 
       <div style={{ display: "flex", gap: "1rem", margin: "1.5rem 0" }}>
         <button onClick={handleStart} disabled={capture.isCapturing} style={btnStyle}>
@@ -101,14 +113,16 @@ export function App() {
         <strong>Capture:</strong> {capture.status}
         {"  |  "}
         <strong>Proxy:</strong> {proxy.status}
+        {"  |  "}
+        <strong style={{ color: vadColor }}>VAD: {vad.state}</strong>
         {proxy.sessionId && (
           <>
             {"  |  "}
             <strong>Session:</strong> {proxy.sessionId.slice(0, 8)}…
           </>
         )}
-        {proxy.lastError && <span style={{ color: "#ef4444" }}> — {proxy.lastError}</span>}
         {capture.error && <span style={{ color: "#ef4444" }}> — {capture.error}</span>}
+        {proxy.lastError && <span style={{ color: "#ef4444" }}> — {proxy.lastError}</span>}
       </div>
 
       <div
@@ -125,8 +139,8 @@ export function App() {
           style={{
             height: "100%",
             width: `${Math.min(100, capture.level * 400)}%`,
-            background: "#7c3aed",
-            transition: "width 50ms linear",
+            background: vad.state === "speech" ? "#22c55e" : "#7c3aed",
+            transition: "width 50ms linear, background 150ms",
           }}
         />
       </div>
@@ -137,11 +151,13 @@ export function App() {
           border: "1px solid rgba(255,255,255,0.06)",
           borderRadius: 12,
           padding: "1rem",
-          marginBottom: "1.5rem",
+          marginBottom: "1rem",
           minHeight: 72,
         }}
       >
-        <div style={{ color: "#64748b", fontSize: 12, marginBottom: 4 }}>Live transcript</div>
+        <div style={{ color: "#64748b", fontSize: 12, marginBottom: 4 }}>
+          Live transcript {vad.state === "speech" ? "(speaking…)" : ""}
+        </div>
         <div style={{ fontSize: 18 }}>
           {finalText && <span style={{ color: "#e2e8f0" }}>{finalText}</span>}
           {interim && (
@@ -150,6 +166,21 @@ export function App() {
           {!finalText && !interim && <span style={{ color: "#64748b" }}>…</span>}
         </div>
       </div>
+
+      {utterances.length > 0 && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <div style={{ color: "#64748b", fontSize: 12, marginBottom: 6 }}>
+            Completed utterances (finals only)
+          </div>
+          <ul style={{ margin: 0, paddingLeft: "1.2rem" }}>
+            {utterances.map((u, i) => (
+              <li key={i} style={{ marginBottom: 4 }}>
+                {u}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <form onSubmit={handleTextSubmit} style={{ marginBottom: "1.5rem" }}>
         <input
