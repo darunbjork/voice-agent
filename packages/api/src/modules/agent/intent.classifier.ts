@@ -1,12 +1,13 @@
-import type { FastifyBaseLogger } from "fastify";
+// packages/api/src/modules/agent/intent.classifier.ts
+// Pure keyword classifier. No LLM, no network, no async.
+// The slow path (Gemini) lives in agent.service.ts.
+
 import type { IntentType } from "@voice-agent/shared-types";
-import { env } from "../../env.js";
-import { assertWithinBudget, estimateTokens } from "../../utils/token-budget.js";
 
 export type ClassifyResult = {
   intent: IntentType;
-  viaFastPath: boolean;
-  confidence: number;
+  viaFastPath: true;
+  confidence: 1;
   slots: Record<string, string>;
 };
 
@@ -73,6 +74,10 @@ const KEYWORD_RULES: KeywordRule[] = [
   },
 ];
 
+/**
+ * Pure keyword classifier. Returns null on miss.
+ * Caller decides what to do on miss (typically: fall through to Gemini).
+ */
 export function classifyByKeywords(text: string): ClassifyResult | null {
   const normalised = text.trim();
   if (!normalised) return null;
@@ -81,43 +86,14 @@ export function classifyByKeywords(text: string): ClassifyResult | null {
     for (const pattern of rule.patterns) {
       if (pattern.test(normalised)) {
         const slots = rule.extract?.(normalised) ?? {};
-        return { intent: rule.intent, viaFastPath: true, confidence: 1, slots };
+        return {
+          intent: rule.intent,
+          viaFastPath: true,
+          confidence: 1,
+          slots,
+        };
       }
     }
   }
   return null;
-}
-
-async function classifySlowPath(text: string, log: FastifyBaseLogger): Promise<ClassifyResult> {
-  const estimated = estimateTokens(text) + 80;
-  assertWithinBudget("agent_classify", estimated);
-
-  if (env.VOICE_MOCK) {
-    log.debug({ textLen: text.length }, "Slow-path classify (mock)");
-    return { intent: "fallback", viaFastPath: false, confidence: 0.5, slots: {} };
-  }
-
-  log.warn("VOICE_MOCK=false but live Gemini classify not yet implemented (Day 16)");
-  return { intent: "fallback", viaFastPath: false, confidence: 0, slots: {} };
-}
-
-export async function classifyIntent(
-  text: string,
-  log: FastifyBaseLogger,
-): Promise<ClassifyResult> {
-  const fast = classifyByKeywords(text);
-  if (fast) {
-    log.info(
-      { intent: fast.intent, viaFastPath: true, slots: fast.slots },
-      "Intent classified (keyword)",
-    );
-    return fast;
-  }
-
-  const slow = await classifySlowPath(text, log);
-  log.info(
-    { intent: slow.intent, viaFastPath: false, slots: slow.slots },
-    "Intent classified (slow path)",
-  );
-  return slow;
 }

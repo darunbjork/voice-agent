@@ -1,14 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyByKeywords, classifyIntent } from "../modules/agent/intent.classifier.js";
-import type { FastifyBaseLogger } from "fastify";
-
-const silentLogger = {
-  info: () => undefined,
-  debug: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
-  child: () => silentLogger,
-} as unknown as FastifyBaseLogger;
+import { classifyByKeywords } from "../modules/agent/intent.classifier.js";
 
 describe("classifyByKeywords", () => {
   it("detects weather with location slot", () => {
@@ -39,19 +30,5 @@ describe("classifyByKeywords", () => {
   it("returns null for unknown phrases", () => {
     const r = classifyByKeywords("Tell me a joke about otters");
     expect(r).toBeNull();
-  });
-});
-
-describe("classifyIntent", () => {
-  it("uses fast path for weather", async () => {
-    const r = await classifyIntent("How is the weather today?", silentLogger);
-    expect(r.intent).toBe("weather");
-    expect(r.viaFastPath).toBe(true);
-  });
-
-  it("falls back under VOICE_MOCK for unknown text", async () => {
-    const r = await classifyIntent("Tell me a joke about otters", silentLogger);
-    expect(r.intent).toBe("fallback");
-    expect(r.viaFastPath).toBe(false);
   });
 });
