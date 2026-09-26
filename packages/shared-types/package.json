@@ -13,6 +13,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "lint": "echo \"no lint yet\" && exit 0",
     "dev": "tsc --watch",
     "type-check": "tsc --noEmit",
     "clean": "rm -rf dist"
