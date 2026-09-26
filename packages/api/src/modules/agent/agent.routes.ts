@@ -39,7 +39,7 @@ export async function agentRoutes(
     {
       preHandler: costGuard,
       schema: {
-        description: "Text-only agent call (mock only on Day 4)",
+        description: "Text-only agent call (mock path)",
         tags: ["agent"],
         body: textBodySchema,
         response: {
