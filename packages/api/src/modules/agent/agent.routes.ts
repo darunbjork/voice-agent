@@ -1,34 +1,24 @@
 import type { FastifyInstance, FastifyPluginOptions } from "fastify";
 import { env } from "../../env.js";
 import { costGuard } from "../../middleware/cost.guard.js";
-import {
-  assertWithinBudget,
-  estimateTokens,
-  BudgetExceededError,
-} from "../../utils/token-budget.js";
-import { mockAgentReply } from "../../utils/voice-mock.js";
-import { incrementUsage } from "../../utils/usage-tracker.js";
-import type { AgentReply, IntentType } from "@voice-agent/shared-types";
-
-interface TextAgentBody {
-  text: string;
-  sessionId: string;
-}
-
-interface TextAgentResponse {
-  reply: AgentReply;
-  mock: boolean;
-}
+import { handleUtterance } from "./agent.service.js";
 
 const textBodySchema = {
   type: "object",
   properties: {
     text: { type: "string", minLength: 1, maxLength: 500 },
     sessionId: { type: "string", minLength: 1 },
+    turnIndex: { type: "integer", minimum: 0 },
   },
   required: ["text", "sessionId"],
   additionalProperties: false,
 } as const;
+
+interface TextAgentBody {
+  text: string;
+  sessionId: string;
+  turnIndex?: number;
+}
 
 export async function agentRoutes(
   app: FastifyInstance,
@@ -39,7 +29,7 @@ export async function agentRoutes(
     {
       preHandler: costGuard,
       schema: {
-        description: "Text-only agent call (mock path)",
+        description: "Text-only agent pipeline (same brain as voice)",
         tags: ["agent"],
         body: textBodySchema,
         response: {
@@ -47,37 +37,28 @@ export async function agentRoutes(
             type: "object",
             properties: {
               reply: { type: "object", additionalProperties: true },
+              viaFastPath: { type: "boolean" },
+              pipelineMs: { type: "number" },
               mock: { type: "boolean" },
             },
-            required: ["reply", "mock"],
-          },
-          429: {
-            type: "object",
-            properties: {
-              error: { type: "string" },
-              message: { type: "string" },
-            },
+            required: ["reply", "viaFastPath", "pipelineMs", "mock"],
           },
         },
       },
     },
-    async (request): Promise<TextAgentResponse> => {
-      const { text, sessionId } = request.body;
+    async (request) => {
+      const body = request.body;
+      const { reply, viaFastPath, pipelineMs } = await handleUtterance(
+        {
+          text: body.text,
+          sessionId: body.sessionId,
+          turnIndex: body.turnIndex ?? 0,
+          sttLatencyMs: 0,
+        },
+        request.log,
+      );
 
-      const estimated = estimateTokens(text) + 150;
-      assertWithinBudget("agent_response", estimated);
-
-      const lower = text.toLowerCase();
-      const intent: IntentType = lower.includes("weather")
-        ? "weather"
-        : lower.includes("help")
-          ? "help"
-          : "fallback";
-
-      const reply = mockAgentReply(sessionId, 1, intent);
-      await incrementUsage({ tokens: estimated });
-
-      return { reply, mock: env.VOICE_MOCK };
+      return { reply, viaFastPath, pipelineMs, mock: env.VOICE_MOCK };
     },
   );
 }
