@@ -1,0 +1,18 @@
+:root {
+  --void: #0a0a0f;
+  --surface: #111118;
+  --surface-2: #16161f;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(255, 255, 255, 0.12);
+  --text: #e2e8f0;
+  --muted: #64748b;
+  --iris: #7c3aed;
+  --iris-soft: #a78bfa;
+  --iris-glow: rgba(124, 58, 237, 0.3);
+  --ember: #f59e0b;
+  --ember-soft: #fb923c;
+  --success: #22c55e;
+  --error: #ef4444;
+  --glass-bg: rgba(17, 17, 24, 0.7);
+  --blur: blur(12px);
+}
