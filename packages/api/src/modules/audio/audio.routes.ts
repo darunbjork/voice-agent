@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createDeepgramProxy, handleControlMessage, type DeepgramProxy } from "./deepgram.proxy.js";
 import { streamTts, type TtsStream } from "./elevenlabs.service.js";
 import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared-types";
+import { handleUtterance } from "../agent/agent.service.js";
 
 const MAX_PCM_CHUNK_BYTES = 4096;
 
@@ -26,20 +27,43 @@ export async function audioRoutes(
 
     const sendSafe = (msg: ServerAudioMessage): void => send(socket, msg);
 
-    const speakReply = (text: string): void => {
-      currentTts?.cancel();
-      const replyText = `You said: ${text}`;
+    const runAgentTurn = async (
+      msg: Extract<ServerAudioMessage, { type: "transcript_final" }>,
+    ): Promise<void> => {
+      sendSafe({ type: "agent_thinking" });
+
       try {
-        currentTts = streamTts(replyText, sendSafe, log, sessionId);
+        const { reply, viaFastPath } = await handleUtterance(
+          {
+            text: msg.text,
+            sessionId,
+            turnIndex: 1, // session service tracks real index on Day 20
+            sttLatencyMs: msg.latencyMs,
+          },
+          log,
+        );
+
+        log.info({ intent: reply.intent, viaFastPath }, "Agent reply ready");
+
+        sendSafe({ type: "agent_response", reply });
+
+        currentTts?.cancel();
+        currentTts = streamTts(reply.text, sendSafe, log, sessionId);
       } catch (err) {
-        log.warn({ err, sessionId }, "TTS not started");
-        currentTts = null;
+        log.error({ err, sessionId }, "Agent turn failed");
+        sendSafe({
+          type: "error",
+          code: "agent_turn_failed",
+          message: err instanceof Error ? err.message : "Agent turn failed",
+        });
       }
     };
 
     const onFinalTranscript = (msg: ServerAudioMessage): void => {
       if (msg.type !== "transcript_final") return;
-      speakReply(msg.text);
+      // Fire-and-forget: the handler stays synchronous, the work is
+      // tracked via logs / WS messages.
+      void runAgentTurn(msg);
     };
 
     try {

@@ -32,6 +32,7 @@ export function App() {
   const [interim, setInterim] = useState("");
   const [finalText, setFinalText] = useState("");
   const [utterances, setUtterances] = useState<string[]>([]);
+  const [agentThinking, setAgentThinking] = useState(false);
 
   const appendLog = useCallback((line: string) => {
     setLog((prev) => [line, ...prev].slice(0, 40));
@@ -57,17 +58,28 @@ export function App() {
         void tts.enqueue(audio, sequenceNum);
       },
       onTtsDone: () => tts.markDone(),
+      onAgentThinking: () => {
+        setAgentThinking(true);
+        appendLog("agent_thinking");
+      },
+      onAgentResponse: (msg) => {
+        setAgentThinking(false);
+        appendLog(`agent_response → intent=${msg.reply.intent} "${msg.reply.text}"`);
+      },
       onError: (code, message) => appendLog(`error → ${code}: ${message}`),
       onMessage: (msg) => {
+        const type = msg.type;
         if (
-          msg.type !== "transcript_interim" &&
-          msg.type !== "transcript_final" &&
-          msg.type !== "session_id" &&
-          msg.type !== "error" &&
-          msg.type !== "tts_chunk" &&
-          msg.type !== "tts_done"
+          type !== "transcript_interim" &&
+          type !== "transcript_final" &&
+          type !== "session_id" &&
+          type !== "error" &&
+          type !== "tts_chunk" &&
+          type !== "tts_done" &&
+          type !== "agent_thinking" &&
+          type !== "agent_response"
         ) {
-          appendLog(`msg → ${msg.type}`);
+          appendLog(`msg → ${type}`);
         }
       },
     },
@@ -111,9 +123,17 @@ export function App() {
       return "interrupted";
     }
     if (tts.isPlaying) return "speaking";
+    if (agentThinking) return "processing";
     if (vad.state === "speech" || capture.isCapturing) return "listening";
     return "idle";
-  }, [bargeIn.isTriggered, bargeIn.status, tts.isPlaying, vad.state, capture.isCapturing]);
+  }, [
+    bargeIn.isTriggered,
+    bargeIn.status,
+    tts.isPlaying,
+    agentThinking,
+    vad.state,
+    capture.isCapturing,
+  ]);
 
   const statusLabel = STATE_LABELS[visualState];
   const waveformColor = STATE_COLORS[visualState];
@@ -131,6 +151,7 @@ export function App() {
     vad.reset();
     waveform.reset();
     setInterim("");
+    setAgentThinking(false);
     appendLog("stopped");
   };
 
