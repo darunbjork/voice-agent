@@ -114,7 +114,21 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
       setStatus("connected");
     };
 
-    ws.onmessage = (event: MessageEvent<string>) => {
+    ws.onmessage = (event: MessageEvent<string | ArrayBuffer>) => {
+      // Binary frame → tts_chunk: [4 bytes BE seq][N bytes PCM]
+      if (event.data instanceof ArrayBuffer) {
+        if (event.data.byteLength < 4) {
+          console.warn("[useDeepgramProxy] undersized binary frame");
+          return;
+        }
+        const view = new DataView(event.data);
+        const sequenceNum = view.getUint32(0, false);
+        const audio = event.data.slice(4);
+        dispatch({ type: "tts_chunk", audio, sequenceNum });
+        return;
+      }
+
+      // Text frame → JSON control message
       try {
         const msg = JSON.parse(event.data) as ServerAudioMessage;
         dispatch(msg);

@@ -9,6 +9,7 @@ export function App() {
   const [interim, setInterim] = useState("");
   const [finalText, setFinalText] = useState("");
   const [utterances, setUtterances] = useState<string[]>([]);
+  const [ttsActive, setTtsActive] = useState(false);
 
   const appendLog = useCallback((line: string) => {
     setLog((prev) => [line, ...prev].slice(0, 40));
@@ -29,12 +30,22 @@ export function App() {
       onError: (code, message) => {
         appendLog(`error → ${code}: ${message}`);
       },
+      onTtsChunk: (_audio, sequenceNum) => {
+        setTtsActive(true);
+        appendLog(`tts_chunk → #${sequenceNum}`);
+      },
+      onTtsDone: () => {
+        setTtsActive(false);
+        appendLog("tts_done");
+      },
       onMessage: (msg) => {
         if (
           msg.type !== "transcript_interim" &&
           msg.type !== "transcript_final" &&
           msg.type !== "session_id" &&
-          msg.type !== "error"
+          msg.type !== "error" &&
+          msg.type !== "tts_chunk" &&
+          msg.type !== "tts_done"
         ) {
           appendLog(`msg → ${msg.type}`);
         }
@@ -66,6 +77,7 @@ export function App() {
     proxy.disconnect();
     vad.reset();
     setInterim("");
+    setTtsActive(false);
     appendLog("stopped");
   };
 
@@ -115,6 +127,10 @@ export function App() {
         <strong>Proxy:</strong> {proxy.status}
         {"  |  "}
         <strong style={{ color: vadColor }}>VAD: {vad.state}</strong>
+        {"  |  "}
+        <strong style={{ color: ttsActive ? "#f59e0b" : "#64748b" }}>
+          TTS: {ttsActive ? "speaking" : "idle"}
+        </strong>
         {proxy.sessionId && (
           <>
             {"  |  "}
