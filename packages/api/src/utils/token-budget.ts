@@ -1,7 +1,3 @@
-// packages/api/src/utils/token-budget.ts
-// Application-level token budgets (docs/cost.md, Section 3).
-// Pre-flight checks — run BEFORE any paid provider call.
-
 export type BudgetOperation =
   | "agent_classify"
   | "agent_response"
@@ -32,7 +28,6 @@ export class BudgetExceededError extends Error {
 }
 
 export function estimateTokens(text: string): number {
-  // ~4 chars per token heuristic; good enough for pre-flight.
   return Math.ceil(text.length / 4);
 }
 

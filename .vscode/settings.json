@@ -7,5 +7,6 @@
     "https://json-schema.org/": true,
     "https://turbo.build/": true,
     "https://turborepo.dev/": true
-  }
+  },
+  "prisma.pinToPrisma6": true
 }

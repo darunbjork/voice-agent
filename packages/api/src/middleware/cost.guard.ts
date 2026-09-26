@@ -1,6 +1,3 @@
-// packages/api/src/middleware/cost.guard.ts
-// preHandler: rejects the request once the daily token budget is exhausted.
-
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { getDailyUsage } from "../utils/usage-tracker.js";
 import { DAILY_MAX_TOKENS, BudgetExceededError } from "../utils/token-budget.js";
@@ -9,7 +6,7 @@ export async function costGuard(
   _request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
-  const usage = getDailyUsage();
+  const usage = await getDailyUsage();
   if (usage.tokens >= DAILY_MAX_TOKENS) {
     const err = new BudgetExceededError(
       "daily",

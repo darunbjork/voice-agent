@@ -13,6 +13,8 @@ import { correlationIdHook } from "./middleware/correlation-id.js";
 import { healthRoutes } from "./modules/health/health.routes.js";
 import { agentRoutes } from "./modules/agent/agent.routes.js";
 import { BudgetExceededError } from "./utils/token-budget.js";
+import prismaPlugin from "./plugins/prisma.plugin.js";
+import redisPlugin from "./plugins/redis.plugin.js";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -69,6 +71,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(fastifySwaggerUi, {
     routePrefix: "/docs",
   });
+
+  await app.register(prismaPlugin);
+  await app.register(redisPlugin);
 
   app.addHook("onRequest", correlationIdHook);
 
