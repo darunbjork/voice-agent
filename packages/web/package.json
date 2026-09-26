@@ -5,17 +5,22 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc --noEmit && vite build",
     "lint": "echo \"no lint yet\" && exit 0",
     "type-check": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@voice-agent/shared-types": "workspace:*"
+    "@voice-agent/shared-types": "workspace:*",
+    "react": "^19",
+    "react-dom": "^19"
   },
   "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.2",
-    "vite": "^6.0.3",
-    "@types/node": "^22.10.2"
+    "vite": "^6.0.3"
   }
 }
