@@ -3,17 +3,22 @@ import type { CSSProperties, FormEvent } from "react";
 import { useAudioCapture } from "./hooks/useAudioCapture.js";
 import { useDeepgramProxy } from "./hooks/useDeepgramProxy.js";
 import { useVAD } from "./hooks/useVAD.js";
+import { useTTSPlayer } from "./hooks/useTTSPlayer.js";
 
 export function App() {
   const [log, setLog] = useState<string[]>([]);
   const [interim, setInterim] = useState("");
   const [finalText, setFinalText] = useState("");
   const [utterances, setUtterances] = useState<string[]>([]);
-  const [ttsActive, setTtsActive] = useState(false);
 
   const appendLog = useCallback((line: string) => {
-    setLog((prev) => [line, ...prev].slice(0, 40));
+    setLog((prev) => [line, ...prev].slice(0, 50));
   }, []);
+
+  const tts = useTTSPlayer({
+    onDone: () => appendLog("TTS playback finished"),
+    onCancel: () => appendLog("TTS playback cancelled"),
+  });
 
   const proxy = useDeepgramProxy({
     handlers: {
@@ -26,17 +31,18 @@ export function App() {
         setInterim("");
         setUtterances((prev) => [text, ...prev].slice(0, 10));
         appendLog(`FINAL utterance → "${text}" (${latencyMs} ms)`);
+        tts.prepare();
+      },
+      onTtsChunk: (audio, sequenceNum) => {
+        appendLog(`tts_chunk → #${sequenceNum} (${audio.byteLength} B)`);
+        void tts.enqueue(audio, sequenceNum);
+      },
+      onTtsDone: () => {
+        appendLog("tts_done (server)");
+        tts.markDone();
       },
       onError: (code, message) => {
         appendLog(`error → ${code}: ${message}`);
-      },
-      onTtsChunk: (_audio, sequenceNum) => {
-        setTtsActive(true);
-        appendLog(`tts_chunk → #${sequenceNum}`);
-      },
-      onTtsDone: () => {
-        setTtsActive(false);
-        appendLog("tts_done");
       },
       onMessage: (msg) => {
         if (
@@ -53,12 +59,25 @@ export function App() {
     },
   });
 
+  const handleSpeechStart = useCallback(() => {
+    appendLog("VAD → speech_start");
+    if (tts.isPlaying) {
+      tts.cancel();
+      proxy.sendMessage({ type: "barge_in" });
+      appendLog("barge_in sent");
+    }
+  }, [appendLog, tts, proxy]);
+
+  const handleSpeechEnd = useCallback(() => {
+    appendLog("VAD → speech_end (500 ms silence)");
+  }, [appendLog]);
+
   const vad = useVAD({
     threshold: 0.02,
     minSpeechMs: 150,
     silenceDurationMs: 500,
-    onSpeechStart: () => appendLog("VAD → speech_start"),
-    onSpeechEnd: () => appendLog("VAD → speech_end (500 ms silence)"),
+    onSpeechStart: handleSpeechStart,
+    onSpeechEnd: handleSpeechEnd,
   });
 
   const capture = useAudioCapture({
@@ -73,12 +92,18 @@ export function App() {
   };
 
   const handleStop = () => {
+    tts.cancel();
     capture.stop();
     proxy.disconnect();
     vad.reset();
     setInterim("");
-    setTtsActive(false);
     appendLog("stopped");
+  };
+
+  const handleInterrupt = () => {
+    tts.cancel();
+    proxy.sendMessage({ type: "barge_in" });
+    appendLog("manual barge_in");
   };
 
   const handleTextSubmit = (e: FormEvent<HTMLFormElement>) => {
@@ -87,12 +112,15 @@ export function App() {
     const input = form.elements.namedItem("text") as HTMLInputElement;
     const text = input.value.trim();
     if (!text) return;
+    tts.prepare();
     proxy.sendMessage({ type: "text_input", text });
     input.value = "";
     appendLog(`text_input → ${text}`);
   };
 
-  const vadColor = vad.state === "speech" ? "#22c55e" : capture.isCapturing ? "#a78bfa" : "#64748b";
+  const vadIsSpeaking = vad.state === "speech";
+
+  const vadColor = vadIsSpeaking ? "#22c55e" : tts.isPlaying ? "#a78bfa" : "#64748b";
 
   return (
     <div
@@ -105,8 +133,8 @@ export function App() {
         maxWidth: 720,
       }}
     >
-      <h1 style={{ marginTop: 0 }}>Voice Agent</h1>
-      <p>Client-side VAD: 500 ms endpointing, finals-only utterances</p>
+      <h1 style={{ marginTop: 0 }}>Voice Agent — Day 12</h1>
+      <p>TTS player — gapless PCM playback + cancel support</p>
 
       <div style={{ display: "flex", gap: "1rem", margin: "1.5rem 0" }}>
         <button onClick={handleStart} disabled={capture.isCapturing} style={btnStyle}>
@@ -119,6 +147,13 @@ export function App() {
         >
           Stop
         </button>
+        <button
+          onClick={handleInterrupt}
+          disabled={!tts.isPlaying}
+          style={{ ...btnStyle, background: "#ef4444" }}
+        >
+          Interrupt TTS
+        </button>
       </div>
 
       <div style={{ marginBottom: "0.75rem", fontSize: 14 }}>
@@ -128,17 +163,10 @@ export function App() {
         {"  |  "}
         <strong style={{ color: vadColor }}>VAD: {vad.state}</strong>
         {"  |  "}
-        <strong style={{ color: ttsActive ? "#f59e0b" : "#64748b" }}>
-          TTS: {ttsActive ? "speaking" : "idle"}
-        </strong>
-        {proxy.sessionId && (
-          <>
-            {"  |  "}
-            <strong>Session:</strong> {proxy.sessionId.slice(0, 8)}…
-          </>
-        )}
+        <strong style={{ color: tts.isPlaying ? "#a78bfa" : "#64748b" }}>TTS: {tts.status}</strong>
         {capture.error && <span style={{ color: "#ef4444" }}> — {capture.error}</span>}
         {proxy.lastError && <span style={{ color: "#ef4444" }}> — {proxy.lastError}</span>}
+        {tts.error && <span style={{ color: "#ef4444" }}> — {tts.error}</span>}
       </div>
 
       <div
@@ -155,7 +183,7 @@ export function App() {
           style={{
             height: "100%",
             width: `${Math.min(100, capture.level * 400)}%`,
-            background: vad.state === "speech" ? "#22c55e" : "#7c3aed",
+            background: vadIsSpeaking ? "#22c55e" : tts.isPlaying ? "#a78bfa" : "#7c3aed",
             transition: "width 50ms linear, background 150ms",
           }}
         />
@@ -172,7 +200,7 @@ export function App() {
         }}
       >
         <div style={{ color: "#64748b", fontSize: 12, marginBottom: 4 }}>
-          Live transcript {vad.state === "speech" ? "(speaking…)" : ""}
+          Live transcript {vadIsSpeaking ? "(speaking…)" : tts.isPlaying ? "(agent speaking)" : ""}
         </div>
         <div style={{ fontSize: 18 }}>
           {finalText && <span style={{ color: "#e2e8f0" }}>{finalText}</span>}
@@ -201,7 +229,7 @@ export function App() {
       <form onSubmit={handleTextSubmit} style={{ marginBottom: "1.5rem" }}>
         <input
           name="text"
-          placeholder="Or type a message…"
+          placeholder="Type a message to hear TTS…"
           style={{
             width: "100%",
             padding: "0.75rem 1rem",
@@ -223,7 +251,7 @@ export function App() {
           fontFamily: "ui-monospace, monospace",
           fontSize: 12,
           opacity: 0.85,
-          maxHeight: 240,
+          maxHeight: 260,
           overflow: "auto",
         }}
       >
