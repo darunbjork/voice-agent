@@ -53,14 +53,12 @@ describe("WebSocket /api/ws/audio (mock mode)", () => {
       }, 5000);
     });
 
-    const sessionMsg = messages.find(
-      (m) => (m as { type: string }).type === "session_id",
-    ) as { sessionId: string } | undefined;
+    const sessionMsg = messages.find((m) => (m as { type: string }).type === "session_id") as
+      { sessionId: string } | undefined;
     expect(sessionMsg?.sessionId).toBeTruthy();
 
-    const finalMsg = messages.find(
-      (m) => (m as { type: string }).type === "transcript_final",
-    ) as { text: string; latencyMs: number } | undefined;
+    const finalMsg = messages.find((m) => (m as { type: string }).type === "transcript_final") as
+      { text: string; latencyMs: number } | undefined;
     expect(finalMsg?.text.length).toBeGreaterThan(0);
     expect(finalMsg?.latencyMs).toBeGreaterThan(0);
   });
@@ -93,9 +91,8 @@ describe("WebSocket /api/ws/audio (mock mode)", () => {
       setTimeout(() => reject(new Error("timeout")), 3000);
     });
 
-    const finalMsg = messages.find(
-      (m) => (m as { type: string }).type === "transcript_final",
-    ) as { text: string } | undefined;
+    const finalMsg = messages.find((m) => (m as { type: string }).type === "transcript_final") as
+      { text: string } | undefined;
     expect(finalMsg?.text).toContain("weather");
   });
 });

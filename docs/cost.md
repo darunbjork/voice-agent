@@ -7,11 +7,11 @@
 
 ## 1. Hard Spending Caps (Provider Dashboards)
 
-| Provider | Console | Recommended Cap | How to set it | Screenshot path |
-|---|---|---|---|---|
-| Deepgram | https://console.deepgram.com | $10 / month | Project → Settings → Billing → Spending Limits | `docs/screenshots/deepgram-cap.png` |
-| ElevenLabs | https://elevenlabs.io/usage | 80% alert of free tier | Account → Subscription → Usage alerts | `docs/screenshots/elevenlabs-alert.png` |
-| Gemini | Google AI Studio + Cloud Console | $10 / month | AI Studio → API keys → Budget alerts; Cloud Billing → Budgets & alerts | `docs/screenshots/gemini-budget.png` |
+| Provider   | Console                          | Recommended Cap        | How to set it                                                          | Screenshot path                         |
+| ---------- | -------------------------------- | ---------------------- | ---------------------------------------------------------------------- | --------------------------------------- |
+| Deepgram   | https://console.deepgram.com     | $10 / month            | Project → Settings → Billing → Spending Limits                         | `docs/screenshots/deepgram-cap.png`     |
+| ElevenLabs | https://elevenlabs.io/usage      | 80% alert of free tier | Account → Subscription → Usage alerts                                  | `docs/screenshots/elevenlabs-alert.png` |
+| Gemini     | Google AI Studio + Cloud Console | $10 / month            | AI Studio → API keys → Budget alerts; Cloud Billing → Budgets & alerts | `docs/screenshots/gemini-budget.png`    |
 
 Action checklist:
 
@@ -23,30 +23,30 @@ Action checklist:
 
 ## 2. Current Unit Prices (approximate, Sep 2026)
 
-| Provider | Unit | Price |
-|---|---|---|
-| Deepgram Nova-2 (STT) | 1 minute of audio | ~$0.0043–$0.0058 |
-| ElevenLabs Turbo/Flash (TTS) | 1000 characters | ~$0.05 |
-| Gemini 1.5 Flash (LLM) | 1M input tokens | ~$0.075–$0.15 |
+| Provider                     | Unit              | Price            |
+| ---------------------------- | ----------------- | ---------------- |
+| Deepgram Nova-2 (STT)        | 1 minute of audio | ~$0.0043–$0.0058 |
+| ElevenLabs Turbo/Flash (TTS) | 1000 characters   | ~$0.05           |
+| Gemini 1.5 Flash (LLM)       | 1M input tokens   | ~$0.075–$0.15    |
 
 Worked example — one 5-minute voice session:
 
-| Step | Usage | Cost |
-|---|---|---|
-| STT | 5 min audio | ~$0.0275 |
-| TTS | ~2400 characters | ~$0.12 |
-| LLM | ~15k input + output tokens | ~$0.001 |
-| **Total** | | **≈ $0.15** |
+| Step      | Usage                      | Cost        |
+| --------- | -------------------------- | ----------- |
+| STT       | 5 min audio                | ~$0.0275    |
+| TTS       | ~2400 characters           | ~$0.12      |
+| LLM       | ~15k input + output tokens | ~$0.001     |
+| **Total** |                            | **≈ $0.15** |
 
 At 1000 sessions/month that is ≈ **$150** — which is exactly why the caps in Section 1 exist.
 
 ## 3. Application-Level Budgets (enforced in code)
 
-| Operation / limit | Value |
-|---|---|
-| `agent_classify` | 200 tokens |
-| `agent_response` | 500 tokens |
-| `session_summary` | 300 tokens |
+| Operation / limit  | Value         |
+| ------------------ | ------------- |
+| `agent_classify`   | 200 tokens    |
+| `agent_response`   | 500 tokens    |
+| `session_summary`  | 300 tokens    |
 | `daily_max_tokens` | 50,000 tokens |
 
 - **Pre-flight check** — `assertWithinBudget(...)` runs before any paid call; an over-budget estimate throws `BudgetExceededError` and the network is never touched.
@@ -70,6 +70,6 @@ At 1000 sessions/month that is ≈ **$150** — which is exactly why the caps in
 
 ## 6. Change Log
 
-| Date | Author | Change |
-|---|---|---|
+| Date       | Author        | Change                                     |
+| ---------- | ------------- | ------------------------------------------ |
 | 2026-09-25 | Darun Mustafa | Initial cost.md + $10 caps + token budgets |

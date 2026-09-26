@@ -15,21 +15,17 @@ describe("token-budget", () => {
   });
 
   it("allows requests inside the per-operation budget", () => {
-    expect(() =>
-      assertWithinBudget("agent_response", TOKEN_BUDGETS.agent_response),
-    ).not.toThrow();
+    expect(() => assertWithinBudget("agent_response", TOKEN_BUDGETS.agent_response)).not.toThrow();
   });
 
   it("throws BudgetExceededError when over the operation limit", () => {
-    expect(() =>
-      assertWithinBudget("agent_response", TOKEN_BUDGETS.agent_response + 1),
-    ).toThrow(BudgetExceededError);
+    expect(() => assertWithinBudget("agent_response", TOKEN_BUDGETS.agent_response + 1)).toThrow(
+      BudgetExceededError,
+    );
   });
 
   it("throws BudgetExceededError when daily ceiling would be exceeded", () => {
-    expect(() => assertDailyBudget(DAILY_MAX_TOKENS - 10, 20)).toThrow(
-      BudgetExceededError,
-    );
+    expect(() => assertDailyBudget(DAILY_MAX_TOKENS - 10, 20)).toThrow(BudgetExceededError);
   });
 
   it("BudgetExceededError carries operation and numbers", () => {

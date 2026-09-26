@@ -4,10 +4,7 @@ import { PrismaClient } from "../generated/prisma/index.js";
 
 async function prismaPlugin(app: FastifyInstance): Promise<void> {
   const prisma = new PrismaClient({
-    log:
-      process.env.NODE_ENV === "development"
-        ? ["error", "warn"]
-        : ["error"],
+    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   });
 
   await prisma.$connect();

@@ -67,23 +67,23 @@ pnpm --filter @voice-agent/api dev
 
 ## Scripts (run from the repo root)
 
-| Command | What it does |
-|---|---|
-| `pnpm dev` | Run all packages in watch mode |
-| `pnpm build` | Build all packages (`tsc`, Vite) |
-| `pnpm type-check` | `tsc --noEmit` across the workspace |
-| `pnpm lint` | Lint all packages (placeholder until ESLint lands) |
-| `pnpm test` | Run Vitest suites |
-| `pnpm clean` | Remove build output |
+| Command           | What it does                                       |
+| ----------------- | -------------------------------------------------- |
+| `pnpm dev`        | Run all packages in watch mode                     |
+| `pnpm build`      | Build all packages (`tsc`, Vite)                   |
+| `pnpm type-check` | `tsc --noEmit` across the workspace                |
+| `pnpm lint`       | Lint all packages (placeholder until ESLint lands) |
+| `pnpm test`       | Run Vitest suites                                  |
+| `pnpm clean`      | Remove build output                                |
 
 ## Ports
 
-| Service | Port |
-|---|---|
-| API | 3001 |
-| Frontend | 5173 |
+| Service                     | Port        |
+| --------------------------- | ----------- |
+| API                         | 3001        |
+| Frontend                    | 5173        |
 | Postgres (host → container) | 5434 → 5432 |
-| Redis (host → container) | 6380 → 6379 |
+| Redis (host → container)    | 6380 → 6379 |
 
 ## Verify your setup
 
