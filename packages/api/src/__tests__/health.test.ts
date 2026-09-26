@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "../app.js";
 
 describe("GET /health", () => {
-  let app: FastifyInstance;
+  let app: FastifyInstance | undefined;
 
   beforeAll(async () => {
     app = await buildApp();
@@ -11,10 +11,11 @@ describe("GET /health", () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
   });
 
   it("returns 200 and the expected shape", async () => {
+    if (!app) throw new Error("app not initialized");
     const response = await app.inject({ method: "GET", url: "/health" });
     expect(response.statusCode).toBe(200);
 

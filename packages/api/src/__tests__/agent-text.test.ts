@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "../app.js";
 
 describe("POST /api/v1/agent/text", () => {
-  let app: FastifyInstance;
+  let app: FastifyInstance | undefined;
 
   beforeAll(async () => {
     app = await buildApp();
@@ -11,10 +11,11 @@ describe("POST /api/v1/agent/text", () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
   });
 
   it("returns a mock weather reply when VOICE_MOCK=true", async () => {
+    if (!app) throw new Error("app not initialized");
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/agent/text",
@@ -35,6 +36,7 @@ describe("POST /api/v1/agent/text", () => {
   });
 
   it("returns help intent for help-like text", async () => {
+    if (!app) throw new Error("app not initialized");
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/agent/text",
@@ -46,6 +48,7 @@ describe("POST /api/v1/agent/text", () => {
   });
 
   it("rejects empty text with 400", async () => {
+    if (!app) throw new Error("app not initialized");
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/agent/text",
