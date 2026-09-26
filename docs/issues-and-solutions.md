@@ -4,20 +4,20 @@ Every issue is tagged with the day it was hit. Constraints are binding for every
 
 ## Index
 
-| Issue | Day | Title |
-|---|---|---|
-| [ISSUE-001](#issue-001--fastifypino-does-not-exist) | **Day 3** | `@fastify/pino` does not exist |
-| [ISSUE-002](#issue-002--fastify-type-provider-zod-imported-but-not-installed) | **Day 3** | `fastify-type-provider-zod` imported but not installed |
-| [ISSUE-003](#issue-003--root-env-not-found-when-cwd-is-packagesapi) | **Day 3** | root `.env` not found when cwd is `packages/api` |
-| [ISSUE-004](#issue-004--explicit-sessionplugin-on-csrf-registration) | **Day 3** | explicit `sessionPlugin` on CSRF registration |
-| [ISSUE-005](#issue-005--allowlist-on-rate-limit-hides-localhost) | **Day 3** | `allowList` on rate-limit hides localhost |
-| [ISSUE-006](#issue-006--server-must-not-auto-start-under-test) | **Day 3** | server must not auto-start under test |
-| [ISSUE-007](#issue-007--no-appdecorateconfig-env-day-6-scope) | **Day 3** | no `app.decorate("config", env)` (Day 6 scope) |
-| [ISSUE-009](#issue-009--geminiagentoutput-missing-from-shared-types) | **Day 4** | `GeminiAgentOutput` missing from shared-types |
-| [ISSUE-010](#issue-010--inline-as----on-requestbody) | **Day 4** | Inline `as { ... }` on `request.body` |
-| [ISSUE-011](#issue-011--dynamic-await-import-inside-fastify-register) | **Day 4** | Dynamic `await import()` inside Fastify register |
-| [ISSUE-012](#issue-012--usage-tracker-read-modify-write-race) | **Day 4** | usage-tracker read-modify-write race |
-| [ISSUE-013](#issue-013--additionalproperties-true-on-reply-response-schema) | **Day 4** | `additionalProperties: true` on reply response schema |
+| Issue                                                                                     | Day       | Title                                                            |
+| ----------------------------------------------------------------------------------------- | --------- | ---------------------------------------------------------------- |
+| [ISSUE-001](#issue-001--fastifypino-does-not-exist)                                       | **Day 3** | `@fastify/pino` does not exist                                   |
+| [ISSUE-002](#issue-002--fastify-type-provider-zod-imported-but-not-installed)             | **Day 3** | `fastify-type-provider-zod` imported but not installed           |
+| [ISSUE-003](#issue-003--root-env-not-found-when-cwd-is-packagesapi)                       | **Day 3** | root `.env` not found when cwd is `packages/api`                 |
+| [ISSUE-004](#issue-004--explicit-sessionplugin-on-csrf-registration)                      | **Day 3** | explicit `sessionPlugin` on CSRF registration                    |
+| [ISSUE-005](#issue-005--allowlist-on-rate-limit-hides-localhost)                          | **Day 3** | `allowList` on rate-limit hides localhost                        |
+| [ISSUE-006](#issue-006--server-must-not-auto-start-under-test)                            | **Day 3** | server must not auto-start under test                            |
+| [ISSUE-007](#issue-007--no-appdecorateconfig-env-day-6-scope)                             | **Day 3** | no `app.decorate("config", env)` (Day 6 scope)                   |
+| [ISSUE-009](#issue-009--geminiagentoutput-missing-from-shared-types)                      | **Day 4** | `GeminiAgentOutput` missing from shared-types                    |
+| [ISSUE-010](#issue-010--inline-as----on-requestbody)                                      | **Day 4** | Inline `as { ... }` on `request.body`                            |
+| [ISSUE-011](#issue-011--dynamic-await-import-inside-fastify-register)                     | **Day 4** | Dynamic `await import()` inside Fastify register                 |
+| [ISSUE-012](#issue-012--usage-tracker-read-modify-write-race)                             | **Day 4** | usage-tracker read-modify-write race                             |
+| [ISSUE-013](#issue-013--additionalproperties-true-on-reply-response-schema)               | **Day 4** | `additionalProperties: true` on reply response schema            |
 | [ISSUE-014](#issue-014--custom-error-handler-returned-500-for-schema-validation-failures) | **Day 4** | Custom error handler returned 500 for schema validation failures |
 
 ---
@@ -49,7 +49,6 @@ logger:
 
 **Day:** 3 · Fastify bootstrap (`packages/api`)
 
-
 **Symptom:** TS2307 `Cannot find module 'fastify-type-provider-zod'` in `health.routes.ts`, from a copy-pasted comment-level import.
 
 **Solution:** Delete the import. Day 3 routes use pure JSON Schema; the Zod type-provider lands only when we actually adopt it. **Rule:** never import `fastify-type-provider-zod` until a day that installs it.
@@ -59,7 +58,6 @@ logger:
 ### ISSUE-003 — root `.env` not found when cwd is `packages/api`
 
 **Day:** 3 · Fastify bootstrap (`packages/api`)
-
 
 **Symptom:** `dotenv.config()` loads nothing under `pnpm --filter @voice-agent/api dev` (cwd = `packages/api`), so Zod rejects `DATABASE_URL` / `JWT_SECRET` and the process exits.
 
@@ -77,7 +75,6 @@ Verified with dotenv 18: root `.env` loads (13 vars), `packages/api/.env` used a
 
 **Day:** 3 · Fastify bootstrap (`packages/api`)
 
-
 **Symptom:** `@fastify/csrf-protection` registered with `sessionPlugin: "@fastify/cookie"` — redundant and trips the banned-pattern check.
 
 **Solution:** omit it. The package default is already `'@fastify/cookie'` (`node_modules/@fastify/csrf-protection/index.js:17`), and `@fastify/cookie` is registered immediately before it. **Rule:** CSRF options are `{ cookieOpts: { signed: true } }` only.
@@ -87,7 +84,6 @@ Verified with dotenv 18: root `.env` loads (13 vars), `packages/api/.env` used a
 ### ISSUE-005 — `allowList` on rate-limit hides localhost
 
 **Day:** 3 · Fastify bootstrap (`packages/api`)
-
 
 **Symptom:** `allowList: ["127.0.0.1"]` disables rate limiting for local traffic — masks the limiter in dev and trips the banned-pattern check.
 
@@ -104,7 +100,6 @@ await app.register(fastifyRateLimit, { max: 200, timeWindow: "1 minute" });
 ### ISSUE-006 — server must not auto-start under test
 
 **Day:** 3 · Fastify bootstrap (`packages/api`)
-
 
 **Symptom:** importing `buildApp()` in a test also binds port 3001 → `EADDRINUSE` / dangling handles.
 
@@ -123,7 +118,6 @@ if (process.env.NODE_ENV !== "test") {
 ### ISSUE-007 — no `app.decorate("config", env)` (Day 6 scope)
 
 **Day:** 3 · Fastify bootstrap (`packages/api`)
-
 
 **Symptom:** decorating the Fastify instance with the env object couples every route to a global mutable surface before the config layer exists.
 
@@ -229,23 +223,23 @@ an invalid payload — a 500 means this branch was lost.
 
 ## Appendix — locked dependency versions (packages/api)
 
-| Package | Version | Note |
-|---|---|---|
-| `fastify` | `^5.12.5` | Pino built in — no pino plugin |
-| `@fastify/helmet` | `^13.1.1` | |
-| `@fastify/cors` | `^11.3.0` | |
-| `@fastify/cookie` | `^11.1.2` | must register before CSRF |
-| `@fastify/csrf-protection` | `^8.0.1` | no `sessionPlugin` (ISSUE-004) |
-| `@fastify/rate-limit` | `^11.2.0` | `max` only, no `allowList` (ISSUE-005) |
-| `@fastify/websocket` | `^11.3.1` | |
-| `@fastify/swagger` | `^9.9.0` | |
-| `@fastify/swagger-ui` | `^6.1.1` | `/docs` |
-| `zod` | `^3.25.76` | v3 line — v4 APIs differ |
-| `dotenv` | `^18.0.3` | array `path` supported |
-| `pino-pretty` (dev) | `^13.1.3` | dev transport only |
-| `tsx` (dev) | `^4.23.15` | |
-| `@types/node` (dev) | `^22.20.4` | |
-| `typescript` (dev) | `^5.7.2` | |
+| Package                    | Version    | Note                                   |
+| -------------------------- | ---------- | -------------------------------------- |
+| `fastify`                  | `^5.12.5`  | Pino built in — no pino plugin         |
+| `@fastify/helmet`          | `^13.1.1`  |                                        |
+| `@fastify/cors`            | `^11.3.0`  |                                        |
+| `@fastify/cookie`          | `^11.1.2`  | must register before CSRF              |
+| `@fastify/csrf-protection` | `^8.0.1`   | no `sessionPlugin` (ISSUE-004)         |
+| `@fastify/rate-limit`      | `^11.2.0`  | `max` only, no `allowList` (ISSUE-005) |
+| `@fastify/websocket`       | `^11.3.1`  |                                        |
+| `@fastify/swagger`         | `^9.9.0`   |                                        |
+| `@fastify/swagger-ui`      | `^6.1.1`   | `/docs`                                |
+| `zod`                      | `^3.25.76` | v3 line — v4 APIs differ               |
+| `dotenv`                   | `^18.0.3`  | array `path` supported                 |
+| `pino-pretty` (dev)        | `^13.1.3`  | dev transport only                     |
+| `tsx` (dev)                | `^4.23.15` |                                        |
+| `@types/node` (dev)        | `^22.20.4` |                                        |
+| `typescript` (dev)         | `^5.7.2`   |                                        |
 
 **Banned in `packages/api/src/` and `packages/api/package.json`:** `@fastify/pino`, `pino-http`, `fastify-type-provider-zod`, `allowList`, `sessionPlugin`.
 

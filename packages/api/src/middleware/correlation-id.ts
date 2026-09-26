@@ -13,7 +13,5 @@ export async function correlationIdHook(
 ): Promise<void> {
   const existing = request.headers["x-correlation-id"];
   request.correlationId =
-    typeof existing === "string" && existing.length > 0
-      ? existing
-      : randomUUID();
+    typeof existing === "string" && existing.length > 0 ? existing : randomUUID();
 }

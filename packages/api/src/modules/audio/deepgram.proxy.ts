@@ -2,10 +2,7 @@ import WebSocket from "ws";
 import type { FastifyBaseLogger } from "fastify";
 import { env } from "../../env.js";
 import { mockTranscriptFinal } from "../../utils/voice-mock.js";
-import type {
-  ClientAudioMessage,
-  ServerAudioMessage,
-} from "@voice-agent/shared-types";
+import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared-types";
 
 const DEEPGRAM_WS_URL =
   "wss://api.deepgram.com/v1/listen?model=nova-2&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&punctuate=true&endpointing=500&smart_format=true";
@@ -112,8 +109,7 @@ function createLiveProxy(
 
       if (msg.type !== "Results") return;
 
-      const transcript =
-        msg.channel?.alternatives?.[0]?.transcript?.trim() ?? "";
+      const transcript = msg.channel?.alternatives?.[0]?.transcript?.trim() ?? "";
       if (!transcript) return;
 
       if (msg.is_final || msg.speech_final) {

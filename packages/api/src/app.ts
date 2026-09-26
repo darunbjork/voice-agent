@@ -80,14 +80,11 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   app.setErrorHandler<FastifyError>(async (err, request, reply) => {
     if (err instanceof BudgetExceededError) {
-      await reply
-        .status(429)
-        .header("Retry-After", "3600")
-        .send({
-          error: "budget_exceeded",
-          message: err.message,
-          correlationId: request.correlationId,
-        });
+      await reply.status(429).header("Retry-After", "3600").send({
+        error: "budget_exceeded",
+        message: err.message,
+        correlationId: request.correlationId,
+      });
       return;
     }
     if (err.validation !== undefined) {

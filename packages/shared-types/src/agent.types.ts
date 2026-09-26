@@ -1,12 +1,6 @@
 import type { LatencyBreakdown } from "./audio.types.js";
 
-export type IntentType =
-  | "weather"
-  | "reminder"
-  | "translate"
-  | "summarize"
-  | "help"
-  | "fallback";
+export type IntentType = "weather" | "reminder" | "translate" | "summarize" | "help" | "fallback";
 
 export type WeatherCard = {
   type: "weather";
@@ -46,12 +40,7 @@ export type HelpCard = {
   }>;
 };
 
-export type ResponseCard =
-  | WeatherCard
-  | ReminderCard
-  | TranslateCard
-  | SummaryCard
-  | HelpCard;
+export type ResponseCard = WeatherCard | ReminderCard | TranslateCard | SummaryCard | HelpCard;
 
 export type AgentReply = {
   text: string;
