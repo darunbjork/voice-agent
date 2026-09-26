@@ -1,10 +1,14 @@
-export type BudgetOperation = "agent_classify" | "agent_response" | "session_summary";
+export type BudgetOperation = "agent_classify" | "agent_response" | "session_summary" | "tts_reply";
 
 export const TOKEN_BUDGETS: Record<BudgetOperation, number> = {
   agent_classify: 200,
   agent_response: 500,
   session_summary: 300,
+  tts_reply: 600,
 } as const;
+
+/** Characters, not tokens. ElevenLabs bills per character. */
+export const TTS_MAX_CHARS_PER_REPLY = 600;
 
 export const DAILY_MAX_TOKENS = 50_000;
 
@@ -37,5 +41,16 @@ export function assertDailyBudget(currentDailyTokens: number, additionalTokens: 
   const projected = currentDailyTokens + additionalTokens;
   if (projected > DAILY_MAX_TOKENS) {
     throw new BudgetExceededError("daily", DAILY_MAX_TOKENS, projected);
+  }
+}
+
+/**
+ * Pre-flight check for a TTS reply. Uses character count, not tokens.
+ * Throws BudgetExceededError with operation "tts_reply" if the reply
+ * would exceed the per-reply cap.
+ */
+export function assertWithinTtsBudget(characterCount: number): void {
+  if (characterCount > TTS_MAX_CHARS_PER_REPLY) {
+    throw new BudgetExceededError("tts_reply", TTS_MAX_CHARS_PER_REPLY, characterCount);
   }
 }

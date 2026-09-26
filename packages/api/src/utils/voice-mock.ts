@@ -111,15 +111,29 @@ export function mockAgentReply(
   };
 }
 
+/**
+ * Short decaying tone as raw 16 kHz 16-bit mono PCM.
+ * Matches the live ElevenLabs output format so the player
+ * can consume mock and live chunks identically.
+ */
 export function mockTtsChunk(sequenceNum: number): {
   audio: ArrayBuffer;
   sequenceNum: number;
 } {
-  const header = new Uint8Array([
-    0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20,
-    0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x80, 0x3e, 0x00, 0x00, 0x00, 0x7d, 0x00, 0x00,
-    0x02, 0x00, 0x10, 0x00, 0x64, 0x61, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00,
-  ]);
+  const sampleRate = 16_000;
+  const durationSec = 0.08;
+  const numSamples = Math.floor(sampleRate * durationSec);
+  const buffer = new ArrayBuffer(numSamples * 2);
+  const view = new DataView(buffer);
+  const freq = 440 + sequenceNum * 60;
 
-  return { audio: header.slice().buffer, sequenceNum };
+  for (let i = 0; i < numSamples; i++) {
+    const t = i / sampleRate;
+    const envelope = Math.exp(-t * 12);
+    const sample = Math.sin(2 * Math.PI * freq * t) * envelope * 0.3;
+    const int16 = Math.max(-32768, Math.min(32767, Math.floor(sample * 32767)));
+    view.setInt16(i * 2, int16, true);
+  }
+
+  return { audio: buffer, sequenceNum };
 }

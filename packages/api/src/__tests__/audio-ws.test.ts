@@ -35,7 +35,8 @@ describe("WebSocket /api/ws/audio (mock mode)", () => {
         }
       });
 
-      ws.on("message", (data) => {
+      ws.on("message", (data, isBinary) => {
+        if (isBinary) return;
         const msg = JSON.parse(data.toString());
         messages.push(msg);
 
@@ -78,7 +79,8 @@ describe("WebSocket /api/ws/audio (mock mode)", () => {
         );
       });
 
-      ws.on("message", (data) => {
+      ws.on("message", (data, isBinary) => {
+        if (isBinary) return;
         const msg = JSON.parse(data.toString());
         messages.push(msg);
         if (msg.type === "transcript_final") {
