@@ -1,0 +1,57 @@
+import { describe, it, expect } from "vitest";
+import { classifyByKeywords, classifyIntent } from "../modules/agent/intent.classifier.js";
+import type { FastifyBaseLogger } from "fastify";
+
+const silentLogger = {
+  info: () => undefined,
+  debug: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+  child: () => silentLogger,
+} as unknown as FastifyBaseLogger;
+
+describe("classifyByKeywords", () => {
+  it("detects weather with location slot", () => {
+    const r = classifyByKeywords("What is the weather in Stockholm?");
+    expect(r?.intent).toBe("weather");
+    expect(r?.viaFastPath).toBe(true);
+    expect(r?.slots.location?.toLowerCase()).toContain("stockholm");
+  });
+
+  it("detects reminder with note slot", () => {
+    const r = classifyByKeywords("Remind me to call the recruiter");
+    expect(r?.intent).toBe("reminder");
+    expect(r?.slots.note?.toLowerCase()).toContain("call");
+  });
+
+  it("detects translate with original and toLang slots", () => {
+    const r = classifyByKeywords("Translate hello world in swedish");
+    expect(r?.intent).toBe("translate");
+    expect(r?.slots.original?.toLowerCase()).toContain("hello");
+    expect(r?.slots.toLang).toBe("swedish");
+  });
+
+  it("detects help", () => {
+    const r = classifyByKeywords("What can you do?");
+    expect(r?.intent).toBe("help");
+  });
+
+  it("returns null for unknown phrases", () => {
+    const r = classifyByKeywords("Tell me a joke about otters");
+    expect(r).toBeNull();
+  });
+});
+
+describe("classifyIntent", () => {
+  it("uses fast path for weather", async () => {
+    const r = await classifyIntent("How is the weather today?", silentLogger);
+    expect(r.intent).toBe("weather");
+    expect(r.viaFastPath).toBe(true);
+  });
+
+  it("falls back under VOICE_MOCK for unknown text", async () => {
+    const r = await classifyIntent("Tell me a joke about otters", silentLogger);
+    expect(r.intent).toBe("fallback");
+    expect(r.viaFastPath).toBe(false);
+  });
+});
