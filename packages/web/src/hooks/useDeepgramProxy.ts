@@ -47,6 +47,7 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRef = useRef<ClientAudioMessage[]>([]);
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current !== null) {
@@ -112,10 +113,15 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
     ws.onopen = () => {
       retriesRef.current = 0;
       setStatus("connected");
+
+      const pending = pendingRef.current;
+      pendingRef.current = [];
+      for (const m of pending) {
+        ws.send(JSON.stringify(m));
+      }
     };
 
     ws.onmessage = (event: MessageEvent<string | ArrayBuffer>) => {
-      // Binary frame → tts_chunk: [4 bytes BE seq][N bytes PCM]
       if (event.data instanceof ArrayBuffer) {
         if (event.data.byteLength < 4) {
           console.warn("[useDeepgramProxy] undersized binary frame");
@@ -128,7 +134,6 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
         return;
       }
 
-      // Text frame → JSON control message
       try {
         const msg = JSON.parse(event.data) as ServerAudioMessage;
         dispatch(msg);
@@ -178,6 +183,7 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
     intentionalCloseRef.current = true;
     clearReconnectTimer();
     retriesRef.current = 0;
+    pendingRef.current = [];
 
     if (wsRef.current) {
       if (wsRef.current.readyState === WebSocket.OPEN) {
@@ -202,7 +208,13 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg));
+      return;
     }
+
+    if (pendingRef.current.length >= 16) {
+      pendingRef.current.shift();
+    }
+    pendingRef.current.push(msg);
   }, []);
 
   useEffect(() => {
