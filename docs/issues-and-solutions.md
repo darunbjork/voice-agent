@@ -21,6 +21,7 @@ Every issue is tagged with the day it was hit. Constraints are binding for every
 | [ISSUE-014](#issue-014--custom-error-handler-returned-500-for-schema-validation-failures) | **Day 4**  | Custom error handler returned 500 for schema validation failures |
 | [ISSUE-015](#issue-015--ws-path-ignores-the-daily-token-ceiling)                          | **Day 30** | WS path ignores the daily token ceiling                          |
 | [ISSUE-025](#issue-025--redisurl-optional-app-boots-without-redis)                        | —          | `REDIS_URL` optional — app boots without Redis                   |
+| [ISSUE-026](#issue-026--swagger-spec-endpoint-500--security-scheme-undefined)             | —          | Swagger spec endpoint 500 — security scheme undefined            |
 
 ---
 
@@ -324,9 +325,64 @@ whether Redis-less should count as `ok`.
 **Unchanged on purpose:** `.env` and `.env.example` keep
 `REDIS_URL=redis://localhost:6380` (local Docker Redis), `fly.toml` and Fly
 secrets carry no `REDIS_URL` key.
-**Enforcement:** the suite must stay green (73 tests), and a boot with
+**Enforcement:** the suite must stay green, and a boot with
 `REDIS_URL` unset must print the guard line
 `REDIS_URL not set — running without Redis`.
+
+---
+
+## API docs (Swagger)
+
+### ISSUE-026 — Swagger spec endpoint 500 — security scheme undefined
+
+**Status:** FIXED
+**Symptom:** Swagger UI at `/docs` loads (200) but reports
+`Failed to load API definition` with
+`Fetch error — Internal Server Error /docs/json`. The HTML page is fine;
+only the JSON spec dies, so every other route in the UI disappears.
+**Root cause:** the three admin routes declare
+`security: [{ basicAuth: [] }]`, but `fastifySwagger` was registered with
+`openapi: { info, servers }` only — no `components.securitySchemes`.
+`@fastify/swagger`'s `prepareOpenapiMethod` then evaluates
+`openapiObject.components.securitySchemes[securitySchemeLabel]`, and
+`securitySchemes` is `undefined`, so the property read throws:
+
+```
+TypeError: Cannot read properties of undefined (reading 'basicAuth')
+    at @fastify/swagger/lib/spec/openapi/utils.js:457
+```
+
+Because the spec is one global document, a single undefined scheme breaks
+`/docs/json` for **all** routes at once. It shipped with the admin routes and
+is not container-specific — `tsx src/app.ts` reproduces it identically (A/B
+verified: 500 before the change, 200 after).
+**Resolution:** declare the scheme where the spec is built, in
+`packages/api/src/app.ts`:
+
+```ts
+components: {
+  securitySchemes: {
+    basicAuth: {
+      type: "http",
+      scheme: "basic",
+      description: "Admin password (ADMIN_PASSWORD) for read-only ops routes",
+    },
+  },
+},
+```
+
+**Verification:**
+
+```
+GET /docs/json → 200 · openapi 3.0.3 · 7 paths
+components.securitySchemes = ["basicAuth"]
+secured routes = 3 (GET /admin/sessions, /admin/sessions/{id}, /admin/usage)
+```
+
+**Enforcement:** `src/__tests__/docs.test.ts` injects `GET /docs/json` and
+asserts 200, the `basicAuth` scheme, and the admin route's `security` block.
+Any new route that declares `security: [{ <name>: [] }]` must add `<name>` to
+`components.securitySchemes` in the same change, or this test fails.
 
 ---
 

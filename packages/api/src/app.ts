@@ -73,6 +73,15 @@ export async function buildApp(): Promise<FastifyInstance> {
         version: "0.1.0",
       },
       servers: [{ url: `http://localhost:${env.PORT}` }],
+      components: {
+        securitySchemes: {
+          basicAuth: {
+            type: "http",
+            scheme: "basic",
+            description: "Admin password (ADMIN_PASSWORD) for read-only ops routes",
+          },
+        },
+      },
     },
   });
 
