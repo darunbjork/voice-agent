@@ -44,6 +44,15 @@ function loadEnv(): Env {
     process.exit(1);
   }
 
+  if (parsed.data.NODE_ENV === "production") {
+    if (parsed.data.VOICE_MOCK) {
+      console.warn("[env] VOICE_MOCK=true in production — provider calls stay mocked");
+    }
+    if (!parsed.data.CORS_ORIGINS || parsed.data.CORS_ORIGINS.length === 0) {
+      console.warn("[env] CORS_ORIGINS empty — browser origins will be rejected");
+    }
+  }
+
   return parsed.data;
 }
 
