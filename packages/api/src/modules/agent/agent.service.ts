@@ -9,12 +9,14 @@ import { classifyByKeywords } from "./intent.classifier.js";
 import { safeGenerateAgentOutput } from "./gemini.service.js";
 import { runTool } from "./tool.registry.js";
 import { incrementUsage } from "../../utils/usage-tracker.js";
+import type { SessionContextTurn } from "../session/session.service.js";
 
 export type HandleUtteranceInput = {
   text: string;
   sessionId: string;
   turnIndex: number;
   sttLatencyMs: number;
+  context?: SessionContextTurn[];
 };
 
 export type HandleUtteranceResult = {
@@ -65,7 +67,16 @@ export async function handleUtterance(
     );
   } else {
     viaFastPath = false;
-    output = await safeGenerateAgentOutput(trimmed, log);
+
+    let promptText = trimmed;
+    if (input.context && input.context.length > 0) {
+      const lines = input.context.map((t) =>
+        t.role === "user" ? `User: ${t.text}` : `Agent: ${t.text}`,
+      );
+      promptText = `${lines.join("\n")}\nUser: ${trimmed}`;
+    }
+
+    output = await safeGenerateAgentOutput(promptText, log, undefined);
     intent = output.intent;
 
     log.info(
@@ -74,8 +85,6 @@ export async function handleUtterance(
     );
   }
 
-  // Floor at 1 ms. The pipeline always took *some* wall-clock time;
-  // reporting 0 would be dishonest and breaks consumers that assume > 0.
   const llmLatencyMs = Math.max(1, Date.now() - pipelineStart);
 
   const latencyMs: LatencyBreakdown = {
