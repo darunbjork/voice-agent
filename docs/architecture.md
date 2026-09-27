@@ -109,7 +109,7 @@ packages/api/src/
   middleware/            correlation-id, cost-guard, basic-auth
   utils/                 token-budget, usage-tracker, circuit-breaker, voice-mock
   config/                cors
-  __tests__/             vitest (17 files, 73 tests)
+  __tests__/             vitest suites (health, agent, WS, budget, swagger)
   generated/prisma/      Prisma client (gitignored)
 ```
 
