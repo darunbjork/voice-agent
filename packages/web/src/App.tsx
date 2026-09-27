@@ -12,6 +12,7 @@ import { ChatLog } from "./components/VoiceAgent/ChatLog.js";
 import { QuickActions } from "./components/VoiceAgent/QuickActions.js";
 import { TextInput } from "./components/VoiceAgent/TextInput.js";
 import { MicButton } from "./components/VoiceAgent/MicButton.js";
+import { AdminPage } from "./pages/AdminPage.js";
 import { LatencyHUD } from "./components/VoiceAgent/LatencyHUD.js";
 import type { AgentVisualState } from "./components/VoiceAgent/StatusRing.js";
 import type { ChatMessageModel } from "./types/chat.js";
@@ -30,7 +31,7 @@ export function App() {
   const [agentThinking, setAgentThinking] = useState(false);
   const [latency, setLatency] = useState<LatencyBreakdown | null>(null);
 
-  // TTS time-to-first-audio-byte tracking.
+  const [view, setView] = useState<"agent" | "admin">("agent");
   const ttsWaitStartedRef = useRef<number | null>(null);
   const ttsFirstByteRef = useRef<boolean>(false);
 
@@ -69,8 +70,6 @@ export function App() {
           card: msg.reply.card,
           intent: msg.reply.intent,
         });
-        // Prime the HUD with server-measured STT + LLM.
-        // TTS is 0 for now — the first audio chunk will fill it in.
         setLatency({
           stt: msg.reply.latencyMs.stt,
           llm: msg.reply.latencyMs.llm,
@@ -82,8 +81,6 @@ export function App() {
         appendLog(`intent=${msg.reply.intent}`);
       },
       onTtsChunk: (audio, sequenceNum) => {
-        // Time-to-first-audio-byte: the number that matters for voice UX.
-        // Playback duration is not latency and would misreport.
         if (!ttsFirstByteRef.current && ttsWaitStartedRef.current !== null) {
           const firstByteMs = Math.round(performance.now() - ttsWaitStartedRef.current);
           ttsFirstByteRef.current = true;
@@ -233,6 +230,10 @@ export function App() {
           ? "listening"
           : "idle";
 
+  if (view === "admin") {
+    return <AdminPage onBack={() => setView("agent")} />;
+  }
+
   return (
     <div
       style={{
@@ -260,9 +261,20 @@ export function App() {
         >
           Voice Agent
         </h1>
-        <p style={{ margin: 0, color: "var(--muted)", fontSize: 14 }}>
+        <p style={{ margin: "0 0 0.6rem", color: "var(--muted)", fontSize: 14 }}>
           Production voice pipeline · Deepgram · Gemini · ElevenLabs
         </p>
+        <button
+          type="button"
+          onClick={() => setView("admin")}
+          style={{
+            ...ghostBtn,
+            fontSize: 12,
+            padding: "0.35rem 0.75rem",
+          }}
+        >
+          Admin
+        </button>
       </header>
 
       <VoiceAgentLayout

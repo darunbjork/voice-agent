@@ -18,6 +18,7 @@ import redisPlugin from "./plugins/redis.plugin.js";
 import { audioRoutes } from "./modules/audio/audio.routes.js";
 import { initSentry } from "./sentry.js";
 import { sessionRoutes } from "./modules/session/session.routes.js";
+import { adminRoutes } from "./modules/admin/admin.routes.js";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -109,6 +110,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(agentRoutes);
   await app.register(audioRoutes);
   await app.register(sessionRoutes);
+  await app.register(adminRoutes);
 
   return app;
 }
