@@ -1,3 +1,5 @@
+/* packages/web/src/styles/tokens.css — Obsidian Forge */
+
 :root {
   --void: #0a0a0f;
   --surface: #111118;
@@ -15,4 +17,14 @@
   --error: #ef4444;
   --glass-bg: rgba(17, 17, 24, 0.7);
   --blur: blur(12px);
+
+  --font-display: "Syne", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-lg: 20px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+
+  --shadow-glass: 0 0 0 1px var(--border), 0 24px 64px rgba(0, 0, 0, 0.45);
 }

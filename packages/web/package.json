@@ -11,6 +11,9 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/syne": "^5.3.0",
     "@voice-agent/shared-types": "workspace:*",
     "gsap": "^3.12.5",
     "react": "^19",

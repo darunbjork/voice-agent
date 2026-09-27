@@ -105,10 +105,6 @@ export async function audioRoutes(
       void runAgentTurn(msg);
     };
 
-    // Session creation + proxy setup run in the background. The socket
-    // listeners below are attached in this same tick, so frames that arrive
-    // during the DB round-trip wait on setupDone instead of being dropped —
-    // EventEmitter does not buffer "message" events for absent listeners.
     const setupDone = (async (): Promise<void> => {
       try {
         const created = await createSession(request.server.prisma);
@@ -139,9 +135,7 @@ export async function audioRoutes(
         });
         try {
           socket.close();
-        } catch {
-          // Socket already torn down — nothing left to close.
-        }
+        } catch {}
       }
     })().catch((err: unknown) => {
       log.error({ err }, "Audio session setup failed");
