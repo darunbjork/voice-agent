@@ -1,0 +1,15 @@
+node_modules
+**/node_modules
+.git
+.github
+.env
+.env.*
+!.env.example
+dist
+**/dist
+coverage
+**/.turbo
+packages/web
+**/*.md
+!docs/cost.md
+!docs/deploy.md

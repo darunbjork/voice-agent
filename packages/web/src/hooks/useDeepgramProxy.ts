@@ -25,9 +25,20 @@ const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_DELAY_MS = 500;
 
 function buildWsUrl(): string {
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const host = window.location.host;
-  return `${protocol}://${host}/api/ws/audio`;
+  // Production: API is on a different host (Fly) than the web (Vercel).
+  // VITE_API_URL is the public API base, e.g. "https://voice-agent-api.fly.dev".
+  // Dev: VITE_API_URL is undefined, so we fall back to same-origin and rely
+  // on the Vite proxy to forward /api to localhost:3001.
+  const apiBase = import.meta.env.VITE_API_URL;
+
+  if (apiBase && apiBase.length > 0) {
+    const url = new URL(apiBase);
+    const wsProtocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return `${wsProtocol}//${url.host}/api/ws/audio`;
+  }
+
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/api/ws/audio`;
 }
 
 export function useDeepgramProxy(options: UseDeepgramProxyOptions) {

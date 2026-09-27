@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.json",
     "lint": "echo \"no lint yet\" && exit 0",
     "dev": "tsx watch src/app.ts",
     "type-check": "tsc --noEmit",
@@ -12,7 +12,11 @@
     "start": "node dist/app.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
