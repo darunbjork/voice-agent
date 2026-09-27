@@ -3,8 +3,16 @@ import type { WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
 import { createDeepgramProxy, handleControlMessage, type DeepgramProxy } from "./deepgram.proxy.js";
 import { streamTts, type TtsStream } from "./elevenlabs.service.js";
-import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared-types";
 import { handleUtterance } from "../agent/agent.service.js";
+import {
+  createSession,
+  endSession,
+  appendTurn,
+  getNextTurnIndex,
+  getRecentContext,
+  type SessionContextTurn,
+} from "../session/session.service.js";
+import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared-types";
 
 const MAX_PCM_CHUNK_BYTES = 4096;
 
@@ -12,16 +20,16 @@ export async function audioRoutes(
   app: FastifyInstance,
   _opts: FastifyPluginOptions,
 ): Promise<void> {
-  app.get("/api/ws/audio", { websocket: true }, (socket: WebSocket, request) => {
-    const sessionId = randomUUID();
+  app.get("/api/ws/audio", { websocket: true }, (socket: WebSocket, request): void => {
+    const ephemeralId = randomUUID();
     const log = request.log.child({
-      sessionId,
+      sessionId: ephemeralId,
       correlationId: request.correlationId,
     });
 
     log.info("Audio WebSocket connection opened");
-    send(socket, { type: "session_id", sessionId });
 
+    let dbSessionId: string = ephemeralId;
     let proxy: DeepgramProxy | null = null;
     let currentTts: TtsStream | null = null;
 
@@ -32,63 +40,114 @@ export async function audioRoutes(
     ): Promise<void> => {
       sendSafe({ type: "agent_thinking" });
 
+      let turnIndex = 0;
       try {
-        const { reply, pipelineMs } = await handleUtterance(
+        turnIndex = await getNextTurnIndex(request.server.prisma, dbSessionId);
+      } catch (err) {
+        log.warn({ err }, "Could not read turn index — using 0");
+      }
+
+      let context: SessionContextTurn[] = [];
+      try {
+        context = await getRecentContext(request.server.prisma, dbSessionId);
+      } catch (err) {
+        log.warn({ err }, "Could not load session context");
+      }
+
+      let reply;
+      let pipelineMs = 0;
+      try {
+        const result = await handleUtterance(
           {
             text: msg.text,
-            sessionId,
-            turnIndex: 1, // session service tracks the real index on Day 20
+            sessionId: dbSessionId,
+            turnIndex,
             sttLatencyMs: msg.latencyMs,
+            context,
           },
           log,
         );
-
-        log.info({ intent: reply.intent, pipelineMs }, "WS agent pipeline done");
-
-        // Send the structured response BEFORE starting TTS
-        // so the card renders even if audio fails.
-        sendSafe({ type: "agent_response", reply });
-
-        currentTts?.cancel();
-        currentTts = streamTts(reply.text, sendSafe, log, sessionId);
+        reply = result.reply;
+        pipelineMs = result.pipelineMs;
       } catch (err) {
-        log.error({ err, sessionId }, "Agent turn failed");
+        log.error({ err }, "Agent pipeline failed");
         sendSafe({
           type: "error",
           code: "agent_turn_failed",
           message: err instanceof Error ? err.message : "Agent turn failed",
         });
+        return;
+      }
+
+      log.info({ pipelineMs, intent: reply.intent, turnIndex }, "WS agent pipeline done");
+
+      sendSafe({ type: "agent_response", reply });
+
+      void appendTurn(
+        request.server.prisma,
+        { sessionId: dbSessionId, userTranscript: msg.text, reply },
+        turnIndex,
+      ).catch((err) => {
+        log.error({ err, turnIndex }, "Failed to persist turn");
+      });
+
+      currentTts?.cancel();
+      try {
+        currentTts = streamTts(reply.text, sendSafe, log, dbSessionId);
+      } catch (err) {
+        log.warn({ err }, "TTS not started");
+        currentTts = null;
       }
     };
 
     const onFinalTranscript = (msg: ServerAudioMessage): void => {
       if (msg.type !== "transcript_final") return;
-      // Fire-and-forget: the handler stays synchronous, the work is
-      // tracked via logs / WS messages.
       void runAgentTurn(msg);
     };
 
-    try {
-      proxy = createDeepgramProxy(
-        (msg) => {
-          sendSafe(msg);
-          onFinalTranscript(msg);
-        },
-        log,
-        sessionId,
-      );
-    } catch (err) {
-      log.error({ err }, "Failed to create Deepgram proxy");
-      sendSafe({
-        type: "error",
-        code: "proxy_init_failed",
-        message: err instanceof Error ? err.message : "Unknown error",
-      });
-      socket.close();
-      return;
-    }
+    // Session creation + proxy setup run in the background. The socket
+    // listeners below are attached in this same tick, so frames that arrive
+    // during the DB round-trip wait on setupDone instead of being dropped —
+    // EventEmitter does not buffer "message" events for absent listeners.
+    const setupDone = (async (): Promise<void> => {
+      try {
+        const created = await createSession(request.server.prisma);
+        dbSessionId = created.sessionId;
+        log.info({ dbSessionId }, "DB session created");
+      } catch (err) {
+        log.error({ err }, "Failed to create DB session — using ephemeral");
+      }
 
-    socket.on("message", (raw: Buffer | ArrayBuffer | Buffer[], isBinary: boolean) => {
+      if (socket.readyState !== socket.OPEN) return;
+
+      try {
+        send(socket, { type: "session_id", sessionId: dbSessionId });
+        proxy = createDeepgramProxy(
+          (msg) => {
+            sendSafe(msg);
+            onFinalTranscript(msg);
+          },
+          log,
+          dbSessionId,
+        );
+      } catch (err) {
+        log.error({ err }, "Failed to send session_id or create proxy");
+        sendSafe({
+          type: "error",
+          code: "proxy_init_failed",
+          message: err instanceof Error ? err.message : "Unknown error",
+        });
+        try {
+          socket.close();
+        } catch {
+          // Socket already torn down — nothing left to close.
+        }
+      }
+    })().catch((err: unknown) => {
+      log.error({ err }, "Audio session setup failed");
+    });
+
+    const handleClientMessage = (raw: Buffer | ArrayBuffer | Buffer[], isBinary: boolean): void => {
       if (!proxy) return;
 
       if (isBinary) {
@@ -125,7 +184,7 @@ export async function audioRoutes(
           },
           proxy,
           log,
-          sessionId,
+          dbSessionId,
         );
       } catch (err) {
         log.warn({ err }, "Invalid client JSON message");
@@ -135,6 +194,10 @@ export async function audioRoutes(
           message: "Could not parse client message",
         });
       }
+    };
+
+    socket.on("message", (raw: Buffer | ArrayBuffer | Buffer[], isBinary: boolean): void => {
+      void setupDone.then(() => handleClientMessage(raw, isBinary));
     });
 
     socket.on("close", () => {
@@ -142,6 +205,12 @@ export async function audioRoutes(
       currentTts?.cancel();
       currentTts = null;
       proxy?.close();
+
+      void setupDone
+        .then(() => endSession(request.server.prisma, dbSessionId))
+        .catch((err) => {
+          log.warn({ err }, "Failed to end session");
+        });
     });
 
     socket.on("error", (err) => {
