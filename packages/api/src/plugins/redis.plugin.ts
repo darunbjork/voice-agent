@@ -5,6 +5,13 @@ import { env } from "../env.js";
 import { bindRedis } from "../utils/usage-tracker.js";
 
 async function redisPlugin(app: FastifyInstance): Promise<void> {
+  // REDIS_URL is optional. Deploys without a Redis add-on skip the client;
+  // usage-tracker falls back to its in-memory store.
+  if (!env.REDIS_URL) {
+    app.log.info("REDIS_URL not set — running without Redis");
+    return;
+  }
+
   const redis = createClient({ url: env.REDIS_URL });
 
   redis.on("error", (err: Error): void => {

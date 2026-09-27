@@ -20,6 +20,7 @@ Every issue is tagged with the day it was hit. Constraints are binding for every
 | [ISSUE-013](#issue-013--additionalproperties-true-on-reply-response-schema)               | **Day 4**  | `additionalProperties: true` on reply response schema            |
 | [ISSUE-014](#issue-014--custom-error-handler-returned-500-for-schema-validation-failures) | **Day 4**  | Custom error handler returned 500 for schema validation failures |
 | [ISSUE-015](#issue-015--ws-path-ignores-the-daily-token-ceiling)                          | **Day 30** | WS path ignores the daily token ceiling                          |
+| [ISSUE-025](#issue-025--redisurl-optional-app-boots-without-redis)                        | —          | `REDIS_URL` optional — app boots without Redis                   |
 
 ---
 
@@ -276,6 +277,60 @@ fix lands, update the failure-mode row in `docs/architecture.md`
 lacks — and vice versa.
 
 ---
+
+## Redis optionality (deploy)
+
+### ISSUE-025 — `REDIS_URL` optional: app boots without Redis
+
+**Status:** FIXED
+**Symptom:** Fly deploy crash-looped. `env.ts` required `REDIS_URL`, Fly had no
+`REDIS_URL` secret, so Zod failed, `process.exit(1)` ran, the machine
+restarted, and health checks never passed.
+**Root cause:** `REDIS_URL: z.string().url().or(z.string().startsWith("redis://"))`
+had no `.optional()`, making `undefined` a hard validation error — even though
+Redis was never structurally required: `usage-tracker` already falls back to
+its in-memory `Map`, and `health.routes.ts` already guards
+`app.redis !== undefined`.
+**Resolution:**
+
+1. `packages/api/src/env.ts` — schema becomes `…optional()`. Format is still
+   validated when the value _is_ set, and an empty string stays falsy, so the
+   plugin guard below covers both `undefined` and `""`.
+2. `packages/api/src/plugins/redis.plugin.ts` — early return before
+   `createClient` when `!env.REDIS_URL`, logging
+   `REDIS_URL not set — running without Redis`. `bindRedis` is never called, so
+   `boundRedis` stays `null` and `getDailyUsage()` serves the in-memory
+   snapshot. The `try/catch` around `connect()`, the `onClose` hook and the
+   `app.decorate("redis", …)` call are unchanged for the connected path.
+3. `packages/api/src/env.ts` — production warning
+   `[env] REDIS_URL not set — using in-memory usage counters`, alongside the
+   existing `VOICE_MOCK` / `CORS_ORIGINS` warnings.
+
+`app.redis` was already typed `redis?: AppRedisClient` in
+`packages/api/src/types/fastify.d.ts`, so no type declaration changes.
+**Behaviour after the change:**
+
+| State                        | `/health`                                                     |
+| ---------------------------- | ------------------------------------------------------------- |
+| `REDIS_URL` set, reachable   | `redis: "ok"`, `status: "ok"`                                 |
+| `REDIS_URL` set, unreachable | `redis: "down"`, `status: "down"`                             |
+| `REDIS_URL` absent           | `redis: "not_configured"`, **`status: "degraded"`**, HTTP 200 |
+
+**Watch out:** the third row reports `degraded`, not `ok` — `health.routes.ts`
+returns `ok` only when _both_ `db` and `redis` are `"ok"`. Fly's HTTP check
+and the Dockerfile `HEALTHCHECK` inspect the status code only, so the deploy
+still goes green. If a stricter check is ever added, decide deliberately
+whether Redis-less should count as `ok`.
+**Unchanged on purpose:** `.env` and `.env.example` keep
+`REDIS_URL=redis://localhost:6380` (local Docker Redis), `fly.toml` and Fly
+secrets carry no `REDIS_URL` key.
+**Enforcement:** the suite must stay green (73 tests), and a boot with
+`REDIS_URL` unset must print the guard line
+`REDIS_URL not set — running without Redis`.
+
+---
+
+## Appendix — locked dependency versions (packages/api)
 
 | Package                    | Version    | Note                                   |
 | -------------------------- | ---------- | -------------------------------------- |
