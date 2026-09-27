@@ -22,6 +22,7 @@ Every issue is tagged with the day it was hit. Constraints are binding for every
 | [ISSUE-015](#issue-015--ws-path-ignores-the-daily-token-ceiling)                          | **Day 30** | WS path ignores the daily token ceiling                          |
 | [ISSUE-025](#issue-025--redisurl-optional-app-boots-without-redis)                        | —          | `REDIS_URL` optional — app boots without Redis                   |
 | [ISSUE-026](#issue-026--swagger-spec-endpoint-500--security-scheme-undefined)             | —          | Swagger spec endpoint 500 — security scheme undefined            |
+| [ISSUE-027](#issue-027--health-reports-degraded-when-redis-is-intentionally-absent)       | —          | `/health` reports degraded when Redis intentionally absent       |
 
 ---
 
@@ -311,23 +312,55 @@ its in-memory `Map`, and `health.routes.ts` already guards
 `packages/api/src/types/fastify.d.ts`, so no type declaration changes.
 **Behaviour after the change:**
 
-| State                        | `/health`                                                     |
-| ---------------------------- | ------------------------------------------------------------- |
-| `REDIS_URL` set, reachable   | `redis: "ok"`, `status: "ok"`                                 |
-| `REDIS_URL` set, unreachable | `redis: "down"`, `status: "down"`                             |
-| `REDIS_URL` absent           | `redis: "not_configured"`, **`status: "degraded"`**, HTTP 200 |
+| State                        | `/health`                                               |
+| ---------------------------- | ------------------------------------------------------- |
+| `REDIS_URL` set, reachable   | `redis: "ok"`, `status: "ok"`                           |
+| `REDIS_URL` set, unreachable | `redis: "down"`, `status: "down"`                       |
+| `REDIS_URL` absent           | `redis: "not_configured"`, **`status: "ok"`**, HTTP 200 |
 
-**Watch out:** the third row reports `degraded`, not `ok` — `health.routes.ts`
-returns `ok` only when _both_ `db` and `redis` are `"ok"`. Fly's HTTP check
-and the Dockerfile `HEALTHCHECK` inspect the status code only, so the deploy
-still goes green. If a stricter check is ever added, decide deliberately
-whether Redis-less should count as `ok`.
+`not_configured` counts as healthy: Redis is deliberately optional (ISSUE-027),
+so treating it as missing would paint every Redis-less deploy `degraded`.
+Only a real `down` — a configured client that fails `PING` — degrades the
+aggregate. `db: "down"` still forces `down`.
 **Unchanged on purpose:** `.env` and `.env.example` keep
 `REDIS_URL=redis://localhost:6380` (local Docker Redis), `fly.toml` and Fly
 secrets carry no `REDIS_URL` key.
 **Enforcement:** the suite must stay green, and a boot with
 `REDIS_URL` unset must print the guard line
 `REDIS_URL not set — running without Redis`.
+
+### ISSUE-027 — `/health` reports degraded when Redis is intentionally absent
+
+**Status:** FIXED
+**Symptom:** with `REDIS_URL` unset (the ISSUE-025 scenario — Fly with no Redis
+add-on), `/health` returned `status: "degraded"` alongside `db: "ok"` and
+`redis: "not_configured"`. HTTP 200, so checks passed, but anyone reading the
+body saw a service that looks unhealthy while it is behaving exactly as
+designed.
+**Root cause:** `health.routes.ts` defined green as
+`db === "ok" && redis === "ok"`. The third state — `not_configured`, meaning
+no client was ever attempted — could not participate in an `ok` aggregate, so
+a deliberate design choice was reported as a fault.
+**Resolution:** distinguish "never attempted" from "attempted and failed":
+
+```ts
+// `not_configured` is a valid state — the app degrades gracefully
+// without Redis. Only an actual "down" degrades the aggregate.
+const dbOk = db === "ok";
+const redisOk = redis === "ok" || redis === "not_configured";
+
+const status: HealthResponse["status"] =
+  db === "down" || redis === "down" ? "down" : dbOk && redisOk ? "ok" : "degraded";
+```
+
+Ordering matters: the `down` branch is evaluated first, so a configured Redis
+that fails `PING` still forces `down` rather than falling through to `ok`.
+`db: "down"` continues to force `down`.
+**Verification:** the behaviour table in ISSUE-025 was corrected to
+`status: "ok"` for the Redis-less row. `health.test.ts` asserts `status`
+matches `/ok|degraded|down/`, so it stays green either way.
+**Enforcement:** a boot with `REDIS_URL` unset must yield
+`status: "ok"` and `redis: "not_configured"` together.
 
 ---
 

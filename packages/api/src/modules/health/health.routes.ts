@@ -95,12 +95,11 @@ export async function healthRoutes(
 
       const usage = await getDailyUsage();
 
+      const dbOk = db === "ok";
+      const redisOk = redis === "ok" || redis === "not_configured";
+
       const status: HealthResponse["status"] =
-        db === "ok" && redis === "ok"
-          ? "ok"
-          : db === "down" || redis === "down"
-            ? "down"
-            : "degraded";
+        db === "down" || redis === "down" ? "down" : dbOk && redisOk ? "ok" : "degraded";
 
       return {
         status,
