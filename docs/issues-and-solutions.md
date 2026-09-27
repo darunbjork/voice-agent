@@ -4,21 +4,22 @@ Every issue is tagged with the day it was hit. Constraints are binding for every
 
 ## Index
 
-| Issue                                                                                     | Day       | Title                                                            |
-| ----------------------------------------------------------------------------------------- | --------- | ---------------------------------------------------------------- |
-| [ISSUE-001](#issue-001--fastifypino-does-not-exist)                                       | **Day 3** | `@fastify/pino` does not exist                                   |
-| [ISSUE-002](#issue-002--fastify-type-provider-zod-imported-but-not-installed)             | **Day 3** | `fastify-type-provider-zod` imported but not installed           |
-| [ISSUE-003](#issue-003--root-env-not-found-when-cwd-is-packagesapi)                       | **Day 3** | root `.env` not found when cwd is `packages/api`                 |
-| [ISSUE-004](#issue-004--explicit-sessionplugin-on-csrf-registration)                      | **Day 3** | explicit `sessionPlugin` on CSRF registration                    |
-| [ISSUE-005](#issue-005--allowlist-on-rate-limit-hides-localhost)                          | **Day 3** | `allowList` on rate-limit hides localhost                        |
-| [ISSUE-006](#issue-006--server-must-not-auto-start-under-test)                            | **Day 3** | server must not auto-start under test                            |
-| [ISSUE-007](#issue-007--no-appdecorateconfig-env-day-6-scope)                             | **Day 3** | no `app.decorate("config", env)` (Day 6 scope)                   |
-| [ISSUE-009](#issue-009--geminiagentoutput-missing-from-shared-types)                      | **Day 4** | `GeminiAgentOutput` missing from shared-types                    |
-| [ISSUE-010](#issue-010--inline-as----on-requestbody)                                      | **Day 4** | Inline `as { ... }` on `request.body`                            |
-| [ISSUE-011](#issue-011--dynamic-await-import-inside-fastify-register)                     | **Day 4** | Dynamic `await import()` inside Fastify register                 |
-| [ISSUE-012](#issue-012--usage-tracker-read-modify-write-race)                             | **Day 4** | usage-tracker read-modify-write race                             |
-| [ISSUE-013](#issue-013--additionalproperties-true-on-reply-response-schema)               | **Day 4** | `additionalProperties: true` on reply response schema            |
-| [ISSUE-014](#issue-014--custom-error-handler-returned-500-for-schema-validation-failures) | **Day 4** | Custom error handler returned 500 for schema validation failures |
+| Issue                                                                                     | Day        | Title                                                            |
+| ----------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------- |
+| [ISSUE-001](#issue-001--fastifypino-does-not-exist)                                       | **Day 3**  | `@fastify/pino` does not exist                                   |
+| [ISSUE-002](#issue-002--fastify-type-provider-zod-imported-but-not-installed)             | **Day 3**  | `fastify-type-provider-zod` imported but not installed           |
+| [ISSUE-003](#issue-003--root-env-not-found-when-cwd-is-packagesapi)                       | **Day 3**  | root `.env` not found when cwd is `packages/api`                 |
+| [ISSUE-004](#issue-004--explicit-sessionplugin-on-csrf-registration)                      | **Day 3**  | explicit `sessionPlugin` on CSRF registration                    |
+| [ISSUE-005](#issue-005--allowlist-on-rate-limit-hides-localhost)                          | **Day 3**  | `allowList` on rate-limit hides localhost                        |
+| [ISSUE-006](#issue-006--server-must-not-auto-start-under-test)                            | **Day 3**  | server must not auto-start under test                            |
+| [ISSUE-007](#issue-007--no-appdecorateconfig-env-day-6-scope)                             | **Day 3**  | no `app.decorate("config", env)` (Day 6 scope)                   |
+| [ISSUE-009](#issue-009--geminiagentoutput-missing-from-shared-types)                      | **Day 4**  | `GeminiAgentOutput` missing from shared-types                    |
+| [ISSUE-010](#issue-010--inline-as----on-requestbody)                                      | **Day 4**  | Inline `as { ... }` on `request.body`                            |
+| [ISSUE-011](#issue-011--dynamic-await-import-inside-fastify-register)                     | **Day 4**  | Dynamic `await import()` inside Fastify register                 |
+| [ISSUE-012](#issue-012--usage-tracker-read-modify-write-race)                             | **Day 4**  | usage-tracker read-modify-write race                             |
+| [ISSUE-013](#issue-013--additionalproperties-true-on-reply-response-schema)               | **Day 4**  | `additionalProperties: true` on reply response schema            |
+| [ISSUE-014](#issue-014--custom-error-handler-returned-500-for-schema-validation-failures) | **Day 4**  | Custom error handler returned 500 for schema validation failures |
+| [ISSUE-015](#issue-015--ws-path-ignores-the-daily-token-ceiling)                          | **Day 30** | WS path ignores the daily token ceiling                          |
 
 ---
 
@@ -221,7 +222,60 @@ an invalid payload — a 500 means this branch was lost.
 
 ---
 
-## Appendix — locked dependency versions (packages/api)
+## Day 30 — Ship
+
+### ISSUE-015 — WS path ignores the daily token ceiling
+
+**Day:** 30 · Ship
+**Status:** OPEN — post-Day-30 fix (~15 min)
+**Symptom:** With `VOICE_MOCK=false`, WebSocket turns keep calling
+Gemini and ElevenLabs after `DAILY_MAX_TOKENS` (50,000) is reached.
+Only `POST /api/v1/agent/text` returns `429`. The primary path —
+voice — has no daily gate at all, so the ceiling is advisory there.
+**Root cause:** `costGuard` (`middleware/cost.guard.ts`) is registered
+only as the `preHandler` of `agent.routes.ts`. `runAgentTurn` in
+`modules/audio/audio.routes.ts` calls `handleUtterance` with no usage
+check, and `assertDailyBudget` in `utils/token-budget.ts` is referenced
+by nothing but its own test. Per-operation budgets and per-provider
+circuits still fire, so a single turn can't blow up — but nothing stops
+an unbounded sequence of turns.
+**Fix (post-Day 30):** in `runAgentTurn`, before `handleUtterance`:
+
+```ts
+const usage = await getDailyUsage();
+if (usage.tokens >= DAILY_MAX_TOKENS) {
+  sendSafe({
+    type: "error",
+    code: "budget_exceeded",
+    message: "Daily token budget exceeded. Try again tomorrow.",
+  });
+  return;
+}
+```
+
+Symmetric pre-flight for the turn that crosses the line — project the
+turn's cost and reject before the provider call, reusing the existing
+helper instead of a second comparison:
+
+```ts
+assertDailyBudget(usage.tokens, estimateTokens(msg.text) + TOKEN_BUDGETS.agent_response);
+```
+
+Wrap it so `BudgetExceededError` becomes the same `budget_exceeded`
+frame rather than an unhandled rejection (`code` is `string` on the
+`error` variant, so no shared-types change is needed — RULE 1 stays
+satisfied). Then a test that seeds `dailyTokens` just under the cap
+(`incrementUsage({ tokens: DAILY_MAX_TOKENS - 10 })` against the
+in-memory store, `resetUsageMemory()` in `afterEach`), runs one WS
+turn, and asserts the next WS turn receives `budget_exceeded` and that
+`handleUtterance` was not reached.
+**Enforcement:** the test must fail if the guard is removed. When the
+fix lands, update the failure-mode row in `docs/architecture.md`
+("WS turns are not gated on the ceiling yet") and the cost bullet in
+`README.md`, or the docs will claim a guarantee the code no longer
+lacks — and vice versa.
+
+---
 
 | Package                    | Version    | Note                                   |
 | -------------------------- | ---------- | -------------------------------------- |

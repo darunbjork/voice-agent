@@ -52,7 +52,7 @@ At 1000 sessions/month that is ≈ **$150** — which is exactly why the caps in
 - **Pre-flight check** — `assertWithinBudget(...)` runs before any paid call; an over-budget estimate throws `BudgetExceededError` and the network is never touched.
 - **Redis daily counter + Sentry at 80%** — usage is counted per day; crossing 80% of `daily_max_tokens` raises an alert (`isApproachingDailyLimit()`).
 - **Idempotency key** — `voice:turn:{sessionId}:{turnIndex}`, TTL 60s, so a retried turn cannot double-bill.
-- **Circuit breaker** — provider calls stop on repeated failure (Day 19).
+- **Circuit breaker** — provider calls stop after 5 consecutive failures (`DEFAULT_CONFIG.failureThreshold`).
 
 ## 4. `VOICE_MOCK=true` (default)
 

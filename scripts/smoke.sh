@@ -13,4 +13,4 @@ pnpm turbo test --force
 echo "→ build"
 pnpm turbo build
 
-echo "OK — Day 30 smoke passed"
+echo "OK — smoke passed"
