@@ -1,6 +1,6 @@
 # AGENTS.md — voice-agent monorepo
 
-Loaded automatically at the start of every opencode session. Read it before writing code. Companion file: `docs/issues-and-solutions.md` (ISSUE-001 … ISSUE-013+) — the binding constraints live there; check the Index table first.
+Loaded automatically at the start of every opencode session. Read it before writing code. Companion file: `docs/issues-and-solutions.md` (ISSUE-001 … ISSUE-015) — the binding constraints live there; check the Index table first.
 
 ## Repo layout
 
@@ -8,7 +8,7 @@ Loaded automatically at the start of every opencode session. Read it before writ
 packages/shared-types  @voice-agent/shared-types  single source of truth for every cross-wire type
 packages/api           @voice-agent/api           Fastify 5 server (port 3001)
 packages/web           @voice-agent/web           Vite frontend (port 5173)
-docs/                  day logs, cost model, issues & solutions
+docs/                  architecture, cost model, deploy, demo, issues & solutions
 ```
 
 Workspace is pnpm + Turborepo. `turbo.json` locks `dependsOn: ["^build"]` — shared-types always builds before its consumers.
@@ -25,15 +25,15 @@ Workspace is pnpm + Turborepo. `turbo.json` locks `dependsOn: ["^build"]` — sh
 
 - No `any`, no non-narrowing casts (`as unknown as T`). Narrowing casts of `request.body` must go through a **named interface** declared above the handler (`TextAgentBody`), not an inline `as { … }`.
 - Explicit return type on every async function.
-- No placeholder comments: no `// ...`, no `// TODO` unless it names a day (`// TODO(Day 5): …`), no elided code in delivered files.
+- No placeholder comments: no `// ...`, no `// TODO` unless it names an issue (`// TODO(ISSUE-015): …`), no elided code in delivered files.
 - Route plugins are imported statically at the top of `app.ts`. No `await import()` in the boot path without a documented circular dependency.
 - Banned symbols in `packages/api/src/` and `packages/api/package.json`: `@fastify/pino`, `pino-http`, `fastify-type-provider-zod`, `allowList`, `sessionPlugin`. See ISSUE-001/002/004/005.
-- `app.ts` keeps the `NODE_ENV !== "test"` guard around `start()` (ISSUE-006). No `app.decorate("config", env)` before Day 6 (ISSUE-007).
+- `app.ts` keeps the `NODE_ENV !== "test"` guard around `start()` (ISSUE-006). No `app.decorate("config", env)` (ISSUE-007).
 - Never install or import a package before checking it exists on the npm registry — 404s have already cost one session.
 
 ## Safety
 
-- `VOICE_MOCK=true` in `.env` means **zero provider calls**. Never set it to `false`, never add code that talks to Deepgram / ElevenLabs / Gemini until `docs/cost.md` caps exist and the day's plan says so.
+- `VOICE_MOCK=true` in `.env` means **zero provider calls**. Never set it to `false`, never add code that talks to Deepgram / ElevenLabs / Gemini until `docs/cost.md` caps exist and the plan says so.
 - Every paid-path function runs `assertWithinBudget(...)` before the network call.
 - `.env` is gitignored — never commit it, never print secrets.
 
@@ -46,12 +46,12 @@ grep -rn "from \"\\./\|from \"\\.\\./" packages/api/src/ | grep -v "\.js\""   # 
 grep -rn "@fastify/pino\|pino-http\|fastify-type-provider-zod\|allowList\|sessionPlugin" packages/api/src/ packages/api/package.json   # exit 1
 ```
 
-Health check: `curl -s localhost:3001/health` (six fields + whatever the day adds), `curl -s localhost:3001/docs` (Swagger UI).
+Health check: `curl -s localhost:3001/health` (`status`, `db`, `redis`, `voiceMock`, `dailyTokens`, `circuits`, …), `curl -s localhost:3001/docs` (Swagger UI).
 
 ## Git
 
 - `main` is protected: direct pushes are rejected, PRs are squash-merged with linear history.
-- One branch per day: `feat/day-NN-<slug>`. Keep the day number in the branch name only; the squash commit subject is day-number-free (`feat(api): …`).
+- One branch per change: `feat/<slug>` (e.g. `feat/ship-docs`). The squash commit subject uses conventional format with no numbering (`feat(api): …`).
 - The human runs the git/PR commands unless explicitly told otherwise.
 
 ## Session protocol

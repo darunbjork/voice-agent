@@ -1,131 +1,149 @@
 # Voice Agent
 
-A production-style voice agent monorepo: Fastify API, React frontend, shared type contracts, cost-controlled LLM/STT/TTS paths. Currently on the mock path — `VOICE_MOCK=true` means **zero provider calls** (see [docs/cost.md](docs/cost.md) before changing that).
+Production-style voice agent: real-time streaming STT, structured LLM reasoning, streaming TTS, cost controls, and an Obsidian Forge UI.
+
+**Built with Deepgram · Gemini · ElevenLabs**
+
+> Default `VOICE_MOCK=true` — zero provider spend until you opt in.
+
+## Live demo
+
+- **Web** — `<web URL after Vercel deploy>` (target: `https://voice-agent.darun.dev`)
+- **API health** — `<fly URL>/health` (target: `https://voice-agent-api.fly.dev/health`)
+- **Portfolio** — [darun-dev.pages.dev](https://darun-dev.pages.dev)
+
+## Architecture
+
+```
+┌─────────────┐  PCM 16kHz   ┌───────────────────────────────────────┐
+│  Browser    │─────────────▶│  Fastify API                          │
+│  Mic / UI   │  WS /api/ws  │  • Deepgram proxy (STT)               │
+│             │◀─────────────│  • Intent (keywords → Gemini Flash)   │
+│  TTS play   │  tts_chunk   │  • Tools (weather, reminder, …)       │
+│  Cards      │  agent_*     │  • ElevenLabs stream (TTS)            │
+│  Admin      │  REST /api   │  • Sessions · usage · circuit breaker │
+└─────────────┘              └───────────┬───────────────────────────┘
+                                         │
+                             ┌───────────▼───────────┐
+                             │  Postgres · Redis     │
+                             └───────────────────────┘
+```
+
+## Latency budget
+
+| Path                             | Mock (measured in-app per turn) | Live (estimated — not measured on prod) |
+| -------------------------------- | ------------------------------- | --------------------------------------- |
+| Keyword intent classify          | < 5 ms                          | < 5 ms                                  |
+| Full brain pipeline              | < 50 ms                         | 300–800 ms                              |
+| Voice final → first TTS chunk    | < 150 ms                        | 400–900 ms                              |
+| Barge-in to silence              | < 200 ms                        | < 200 ms                                |
+| Total turn (green HUD threshold) | < 500 ms                        | 800–1500 ms                             |
+
+The mock column is what the LatencyHUD reports on a local run; the live column is the design target — **no production measurement exists yet**, and the HUD is the instrument that will produce one. Thresholds are `green < 500 ms`, `amber < 1000 ms`, `red ≥ 1000 ms`.
+
+## Cost controls
+
+- Provider caps set and documented in [`docs/cost.md`](docs/cost.md)
+- Daily token ceiling (50,000): `429` on the HTTP text route, 80% alert via structured log
+- Circuit breaker per provider (opens after 5 consecutive failures)
+- Pre-flight character/token budget before every Gemini or ElevenLabs call
+- All provider keys server-side only — see [`docs/security.md`](docs/security.md)
+
+## Monorepo
+
+```
+packages/
+  api/           Fastify 5 · Prisma · WebSocket · agent · admin
+  web/           React 19 · Vite · voice UI + admin
+  shared-types/  Discriminated unions (audio, agent, cards)
+```
+
+## Quick start
+
+```bash
+# 1. Install
+pnpm install
+
+# 2. Configure env — TWO files (see "Why two .env files" below)
+cp .env.example .env
+cp .env packages/api/.env
+
+# 3. Edit .env and set a JWT_SECRET and ADMIN_PASSWORD
+#    openssl rand -hex 32   for each
+
+# 4. Bring up Postgres and Redis
+docker compose up -d
+
+# 5. Run migrations
+pnpm --filter @voice-agent/api exec prisma migrate dev
+
+# 6. Start everything
+pnpm turbo dev
+```
+
+- **Web:** http://localhost:5173
+- **API health:** http://localhost:3001/health
+- **Swagger:** http://localhost:3001/docs
+- **Admin:** click **Admin** in the app header. Sign in with `ADMIN_PASSWORD`.
+
+`.env.example` already points at the compose ports (Postgres `5434`, Redis `6380`) — copy it as-is and it works.
+
+### Why two `.env` files
+
+- The Fastify app loads `../../.env` then `.env` (root-first).
+- Prisma CLI reads only `packages/api/.env`.
+- Both must contain the same `DATABASE_URL`.
+
+Full explanation in [`docs/architecture.md`](docs/architecture.md).
+
+### Admin sign-in
+
+`ADMIN_PASSWORD` gates every `/api/v1/admin/*` route (HTTP Basic, 60 req/min, `Cache-Control: no-store`):
+
+- **blank** → `503` — the admin surface is disabled on purpose in a fresh clone.
+- **set, wrong password** → `401 {"error":"unauthorized"}`.
+- **set, correct password** → read-only sessions / turns / usage / circuits.
+
+Local dev without admin: leave it blank. To try it: set it, restart `pnpm turbo dev`, then sign in with that value.
 
 ## Stack
 
-- **pnpm + Turborepo** workspace, TypeScript everywhere (`strict`)
-- **Fastify 5** API with Swagger UI at `/docs`
-- **Prisma 6** + PostgreSQL (session persistence)
-- **Redis** (daily usage counters, atomic `MULTI`/`EXEC`)
-- **Vite** frontend (`packages/web`)
-- **Vitest** tests, **GitHub Actions** CI (Lint → Type-check → Test → Build)
+| Layer  | Choice                                                              |
+| ------ | ------------------------------------------------------------------- |
+| API    | Fastify 5, TypeScript strict, Zod env validation                    |
+| STT    | Deepgram Nova-2 (WebSocket proxy)                                   |
+| LLM    | Gemini Flash[^gemini], structured JSON + Zod, single slow-path call |
+| TTS    | ElevenLabs Turbo v2.5, PCM 16 kHz stream                            |
+| Data   | PostgreSQL + Prisma 6, Redis 7                                      |
+| Web    | React 19, Vite 6, GSAP 3, CSS design tokens (Obsidian Forge)        |
+| Deploy | Fly.io (API), Vercel (web), Neon (Postgres), Upstash (Redis)        |
 
-## Repo layout
+[^gemini]: The pinned id is `MODEL_ID = "gemini-1.5-flash"` in `packages/api/src/modules/agent/gemini.service.ts`. Google rotates model ids — if it 404s, bump that constant to the current Flash id. Docs say "Gemini Flash" on purpose.
 
-```
-packages/shared-types  @voice-agent/shared-types  single source of truth for cross-wire types
-packages/api           @voice-agent/api           Fastify server (port 3001)
-packages/web           @voice-agent/web           Vite frontend (port 5173)
-docs/                  day logs, cost model, issues & solutions
-```
-
-## Prerequisites
-
-- Node.js 22+ (CI runs 22)
-- pnpm 9.15.0 — installed automatically via the `packageManager` field if you have corepack enabled (`corepack enable`)
-- Docker with Compose v2
-
-## Getting started
+## Scripts
 
 ```bash
-# 1. Install dependencies
-pnpm install
-
-# 2. Environment — copy the template and fill in values
-cp .env.example .env
-#    IMPORTANT: docker-compose publishes Postgres on host port 5434 and Redis
-#    on 6380 (see Ports below). Make sure .env matches:
-#    DATABASE_URL=postgresql://voiceagent:voiceagent@localhost:5434/voiceagent
-#    REDIS_URL=redis://localhost:6380
-
-# 3. Start Postgres + Redis
-docker compose up -d
-docker compose ps          # both containers should be healthy
-
-# 4. Prisma: the CLI reads .env from packages/api/ (not the repo root),
-#    so hand it the DATABASE_URL it needs, then migrate + generate
-cd packages/api
-echo "DATABASE_URL=$(grep '^DATABASE_URL=' ../../.env | cut -d= -f2-)" > .env   # gitignored
-pnpm exec prisma migrate dev --name init
-pnpm exec prisma generate
-cd ../..
-
-# 5. Run everything (api :3001, web :5173)
-pnpm dev
+pnpm turbo type-check    # 0 errors across all packages
+pnpm turbo test          # vitest, VOICE_MOCK enforced
+pnpm turbo build         # tsc + vite build
+pnpm format              # prettier
+pnpm format:check        # CI-equivalent
 ```
-
-API only:
-
-```bash
-pnpm --filter @voice-agent/api dev
-```
-
-> `packages/api/.env` and `packages/api/src/generated/prisma/` are generated
-> artifacts — both are gitignored. Never commit them, never put real secrets in
-> the repo.
-
-## Scripts (run from the repo root)
-
-| Command           | What it does                                       |
-| ----------------- | -------------------------------------------------- |
-| `pnpm dev`        | Run all packages in watch mode                     |
-| `pnpm build`      | Build all packages (`tsc`, Vite)                   |
-| `pnpm type-check` | `tsc --noEmit` across the workspace                |
-| `pnpm lint`       | Lint all packages (placeholder until ESLint lands) |
-| `pnpm test`       | Run Vitest suites                                  |
-| `pnpm clean`      | Remove build output                                |
-
-## Ports
-
-| Service                     | Port        |
-| --------------------------- | ----------- |
-| API                         | 3001        |
-| Frontend                    | 5173        |
-| Postgres (host → container) | 5434 → 5432 |
-| Redis (host → container)    | 6380 → 6379 |
-
-## Verify your setup
-
-```bash
-# Health: expect status/db/redis all "ok"
-curl -s localhost:3001/health | jq
-
-# Swagger UI
-open http://localhost:3001/docs
-
-# Tests + types
-pnpm test && pnpm type-check
-```
-
-Housekeeping checks (must all be empty — see [AGENTS.md](AGENTS.md)):
-
-```bash
-grep -rn ": any\|<any>\|as any" packages/api/src/ --exclude-dir=generated
-grep -rn "@fastify/pino\|pino-http" packages/api/src/ packages/api/package.json
-grep -rn "await import(" packages/api/src/ --exclude-dir=generated
-```
-
-## Cost & safety
-
-- `VOICE_MOCK=true` (the default) = **zero network calls to Deepgram / ElevenLabs / Gemini**. Leave it that way until [docs/cost.md](docs/cost.md) caps are in place and you have consciously accepted the spend.
-- Every paid-path function must run `assertWithinBudget(...)` before any network call.
-- `.env` is gitignored — never commit it, never print secrets.
-
-## CI
-
-[.github/workflows/ci.yml](.github/workflows/ci.yml) runs four jobs on pushes to `main` and on PRs:
-
-```
-Lint (parallel) → Type-check → Test (Postgres + Redis services) → Build
-```
-
-The pnpm version comes from the `packageManager` field in the root
-`package.json` — do not also pin `version:` in `pnpm/action-setup` (the action
-errors on both being present).
 
 ## Docs
 
-- [AGENTS.md](AGENTS.md) — binding rules for AI-assisted sessions
-- [docs/cost.md](docs/cost.md) — budgets, caps, and the mock-path contract
-- [docs/issues-and-solutions.md](docs/issues-and-solutions.md) — ISSUE-001…, the log of every trap hit so far; check the Index before writing code
+- [`docs/architecture.md`](docs/architecture.md) — request paths, failure modes, type contracts
+- [`docs/cost.md`](docs/cost.md) — provider caps and runbook
+- [`docs/security.md`](docs/security.md) — threat model and checklist
+- [`docs/deploy.md`](docs/deploy.md) — Fly + Vercel walkthrough
+- [`docs/demo.md`](docs/demo.md) — recruiter demo script
+- [`docs/portfolio.md`](docs/portfolio.md) — project card + repo copy for darun.dev
+- [`docs/issues-and-solutions.md`](docs/issues-and-solutions.md) — defect log with stable IDs
+
+## Deploy
+
+See [`docs/deploy.md`](docs/deploy.md).
+
+## Author
+
+**Darun Mustafa** · [GitHub](https://github.com/darunbjork) · [Portfolio](https://darun-dev.pages.dev)
