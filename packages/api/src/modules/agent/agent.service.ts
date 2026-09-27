@@ -74,13 +74,15 @@ export async function handleUtterance(
     );
   }
 
-  const llmLatencyMs = Date.now() - pipelineStart;
+  // Floor at 1 ms. The pipeline always took *some* wall-clock time;
+  // reporting 0 would be dishonest and breaks consumers that assume > 0.
+  const llmLatencyMs = Math.max(1, Date.now() - pipelineStart);
 
   const latencyMs: LatencyBreakdown = {
     stt: input.sttLatencyMs,
     llm: llmLatencyMs,
     tts: 0,
-    total: input.sttLatencyMs + llmLatencyMs,
+    total: Math.max(1, input.sttLatencyMs + llmLatencyMs),
   };
 
   const reply: AgentReply = {
@@ -113,7 +115,7 @@ export async function handleUtterance(
 }
 
 function buildEmptyReply(input: HandleUtteranceInput, startedAt: number): HandleUtteranceResult {
-  const llm = Date.now() - startedAt;
+  const llm = Math.max(1, Date.now() - startedAt);
   const reply: AgentReply = {
     text: "I did not catch that. Could you say it again?",
     intent: "fallback",
