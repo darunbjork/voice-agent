@@ -8,7 +8,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 
   DATABASE_URL: z.string().url().or(z.string().startsWith("postgresql://")),
-  REDIS_URL: z.string().url().or(z.string().startsWith("redis://")),
+  REDIS_URL: z.string().url().or(z.string().startsWith("redis://")).optional(),
 
   VOICE_MOCK: z
     .enum(["true", "false"])
@@ -50,6 +50,9 @@ function loadEnv(): Env {
     }
     if (!parsed.data.CORS_ORIGINS || parsed.data.CORS_ORIGINS.length === 0) {
       console.warn("[env] CORS_ORIGINS empty — browser origins will be rejected");
+    }
+    if (!parsed.data.REDIS_URL) {
+      console.warn("[env] REDIS_URL not set — using in-memory usage counters");
     }
   }
 

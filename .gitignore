@@ -11,3 +11,4 @@ docs/day-*.md
 docs/ruleset-setup.md
 packages/api/src/generated/prisma/
 packages/api/.env
+AGENTS.md
