@@ -7,21 +7,29 @@ import { useTTSPlayer } from "./hooks/useTTSPlayer.js";
 import { useBargeIn } from "./hooks/useBargeIn.js";
 import { useWaveform } from "./hooks/useWaveform.js";
 import { VoiceAgentLayout } from "./components/VoiceAgent/VoiceAgent.js";
+import { ChatLog } from "./components/VoiceAgent/ChatLog.js";
 import type { AgentVisualState } from "./components/VoiceAgent/StatusRing.js";
-import type { ResponseCard } from "@voice-agent/shared-types";
+import type { ChatMessageModel } from "./types/chat.js";
+import "./styles/globals.css";
 
 const VAD_MIN_SPEECH_MS = 100;
+
+function newId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
 
 export function App() {
   const [log, setLog] = useState<string[]>([]);
   const [interim, setInterim] = useState("");
-  const [finalText, setFinalText] = useState("");
-  const [agentText, setAgentText] = useState("");
-  const [lastCard, setLastCard] = useState<ResponseCard | null>(null);
+  const [messages, setMessages] = useState<ChatMessageModel[]>([]);
   const [agentThinking, setAgentThinking] = useState(false);
 
   const appendLog = useCallback((line: string) => {
-    setLog((prev) => [line, ...prev].slice(0, 24));
+    setLog((prev) => [line, ...prev].slice(0, 20));
+  }, []);
+
+  const pushMessage = useCallback((msg: Omit<ChatMessageModel, "id" | "createdAt">) => {
+    setMessages((prev) => [...prev, { ...msg, id: newId(), createdAt: new Date().toISOString() }]);
   }, []);
 
   const tts = useTTSPlayer({
@@ -34,8 +42,8 @@ export function App() {
       onSessionId: (id) => appendLog(`session ${id.slice(0, 8)}`),
       onInterim: (text) => setInterim(text),
       onFinal: (text, latencyMs) => {
-        setFinalText(text);
         setInterim("");
+        pushMessage({ role: "user", text });
         appendLog(`final (${latencyMs}ms)`);
         tts.prepare();
       },
@@ -45,8 +53,12 @@ export function App() {
       },
       onAgentResponse: (msg) => {
         setAgentThinking(false);
-        setAgentText(msg.reply.text);
-        setLastCard(msg.reply.card);
+        pushMessage({
+          role: "agent",
+          text: msg.reply.text,
+          card: msg.reply.card,
+          intent: msg.reply.intent,
+        });
         appendLog(`intent=${msg.reply.intent}`);
       },
       onTtsChunk: (audio, sequenceNum) => {
@@ -131,12 +143,14 @@ export function App() {
     interrupted: "Interrupted",
   };
 
+  // Waveform colors use hex literals — Canvas does not resolve CSS variables
+  // in fillStyle. See ISSUE-024 in docs/issues-and-solutions.md.
   const waveformColor: Record<AgentVisualState, string> = {
-    idle: "var(--muted)",
-    listening: "var(--success)",
-    processing: "var(--ember)",
-    speaking: "var(--iris-soft)",
-    interrupted: "var(--error)",
+    idle: "#64748b",
+    listening: "#22c55e",
+    processing: "#f59e0b",
+    speaking: "#a78bfa",
+    interrupted: "#ef4444",
   };
 
   const handleStart = async () => {
@@ -164,6 +178,8 @@ export function App() {
     if (!text) return;
     if (!proxy.isConnected) proxy.connect();
     tts.prepare();
+    // User bubble appears when the server echoes transcript_final.
+    // Do NOT push here or typed input produces two bubbles.
     proxy.sendMessage({ type: "text_input", text });
     input.value = "";
     appendLog(`text → ${text.slice(0, 40)}`);
@@ -196,14 +212,7 @@ export function App() {
         >
           Voice Agent
         </h1>
-        <p
-          style={{
-            margin: 0,
-            color: "var(--muted)",
-            fontSize: 14,
-            lineHeight: 1.5,
-          }}
-        >
+        <p style={{ margin: 0, color: "var(--muted)", fontSize: 14 }}>
           Production voice pipeline · Deepgram · Gemini · ElevenLabs
         </p>
       </header>
@@ -216,94 +225,7 @@ export function App() {
         sessionId={proxy.sessionId}
         footer="Darun Mustafa · darun.dev"
       >
-        <div
-          style={{
-            background: "var(--surface-2)",
-            borderRadius: "var(--radius-md)",
-            border: "1px solid var(--border)",
-            padding: "0.9rem 1rem",
-            marginBottom: "1rem",
-            minHeight: 72,
-          }}
-        >
-          <div
-            style={{
-              fontSize: 11,
-              fontWeight: 500,
-              color: "var(--muted)",
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-              marginBottom: 6,
-            }}
-          >
-            Transcript
-          </div>
-          <div style={{ fontSize: 15, lineHeight: 1.45 }}>
-            {finalText && <span>{finalText}</span>}
-            {interim && (
-              <span
-                style={{
-                  color: "var(--iris-soft)",
-                  marginLeft: finalText ? 6 : 0,
-                }}
-              >
-                {interim}
-              </span>
-            )}
-            {!finalText && !interim && (
-              <span style={{ color: "var(--muted)" }}>Speak or type to begin…</span>
-            )}
-          </div>
-          {agentText && (
-            <div
-              style={{
-                marginTop: 10,
-                paddingTop: 10,
-                borderTop: "1px solid var(--border)",
-                fontSize: 14,
-                color: "var(--iris-soft)",
-              }}
-            >
-              {agentText}
-            </div>
-          )}
-        </div>
-
-        {lastCard && (
-          <div
-            style={{
-              background: "var(--surface)",
-              border: "1px solid var(--border-hover)",
-              borderRadius: "var(--radius-md)",
-              padding: "0.75rem 1rem",
-              marginBottom: "1rem",
-              fontSize: 13,
-            }}
-          >
-            <span
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-                color: "var(--iris-soft)",
-                textTransform: "uppercase",
-              }}
-            >
-              {lastCard.type}
-            </span>
-            <pre
-              style={{
-                margin: "0.4rem 0 0",
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-                color: "var(--muted)",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}
-            >
-              {JSON.stringify(lastCard, null, 2)}
-            </pre>
-          </div>
-        )}
+        <ChatLog messages={messages} interim={interim} />
 
         <div
           style={{
@@ -362,12 +284,6 @@ export function App() {
               fontSize: 14,
               outline: "none",
             }}
-            onFocus={(e) => {
-              e.currentTarget.style.borderColor = "var(--iris)";
-            }}
-            onBlur={(e) => {
-              e.currentTarget.style.borderColor = "var(--border)";
-            }}
           />
         </form>
       </VoiceAgentLayout>
@@ -379,15 +295,12 @@ export function App() {
           fontFamily: "var(--font-mono)",
           fontSize: 11,
           color: "var(--muted)",
-          maxHeight: 120,
+          maxHeight: 100,
           overflow: "auto",
-          opacity: 0.85,
         }}
       >
         {log.map((line, i) => (
-          <div key={i} style={{ padding: "1px 0" }}>
-            {line}
-          </div>
+          <div key={i}>{line}</div>
         ))}
       </div>
     </div>
