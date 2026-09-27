@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyPluginOptions } from "fastify";
 import { env } from "../../env.js";
 import { getDailyUsage } from "../../utils/usage-tracker.js";
+import { getAllCircuitSnapshots, type CircuitSnapshot } from "../../utils/circuit-breaker.js";
 import { DAILY_MAX_TOKENS } from "../../utils/token-budget.js";
 
 const healthResponseSchema = {
@@ -12,6 +13,24 @@ const healthResponseSchema = {
     voiceMock: { type: "boolean" },
     dailyTokens: { type: "number" },
     dailyTokenLimit: { type: "number" },
+    circuits: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          provider: {
+            type: "string",
+            enum: ["gemini", "deepgram", "elevenlabs"],
+          },
+          state: { type: "string", enum: ["closed", "open", "half_open"] },
+          failures: { type: "number" },
+          openedAt: { type: ["number", "null"] },
+          lastFailureAt: { type: ["number", "null"] },
+        },
+        required: ["provider", "state", "failures", "openedAt", "lastFailureAt"],
+        additionalProperties: false,
+      },
+    },
     timestamp: { type: "string", format: "date-time" },
     correlationId: { type: "string" },
   },
@@ -22,6 +41,7 @@ const healthResponseSchema = {
     "voiceMock",
     "dailyTokens",
     "dailyTokenLimit",
+    "circuits",
     "timestamp",
     "correlationId",
   ],
@@ -35,6 +55,7 @@ interface HealthResponse {
   voiceMock: boolean;
   dailyTokens: number;
   dailyTokenLimit: number;
+  circuits: CircuitSnapshot[];
   timestamp: string;
   correlationId: string;
 }
@@ -88,6 +109,7 @@ export async function healthRoutes(
         voiceMock: env.VOICE_MOCK,
         dailyTokens: usage.tokens,
         dailyTokenLimit: DAILY_MAX_TOKENS,
+        circuits: getAllCircuitSnapshots(),
         timestamp: new Date().toISOString(),
         correlationId: request.correlationId,
       };

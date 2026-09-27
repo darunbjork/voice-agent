@@ -25,6 +25,7 @@
     "@fastify/websocket": "^11.3.1",
     "@google/genai": "^2.24.0",
     "@prisma/client": "^6.19.3",
+    "@sentry/node": "^11.0.0",
     "@voice-agent/shared-types": "workspace:*",
     "dotenv": "^18.0.3",
     "fastify": "^5.12.5",

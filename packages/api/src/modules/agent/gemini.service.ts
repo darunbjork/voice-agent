@@ -8,6 +8,12 @@ import {
   BudgetExceededError,
 } from "../../utils/token-budget.js";
 import { mockGeminiOutput } from "../../utils/voice-mock.js";
+import {
+  assertCircuitClosed,
+  recordSuccess,
+  recordFailure,
+  CircuitOpenError,
+} from "../../utils/circuit-breaker.js";
 import { GeminiAgentOutputSchema, type GeminiAgentOutputParsed } from "./gemini.schema.js";
 
 const MODEL_ID = "gemini-1.5-flash";
@@ -53,26 +59,41 @@ export async function generateAgentOutput(
     throw new Error("GEMINI_API_KEY is required when VOICE_MOCK=false");
   }
 
+  assertCircuitClosed("gemini");
+
   const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
   log.info({ model: MODEL_ID, textLen: userText.length }, "Gemini request");
 
-  const response = await ai.models.generateContent({
-    model: MODEL_ID,
-    contents: userText,
-    config: {
-      systemInstruction: SYSTEM_PROMPT,
-      temperature: 0.3,
-      responseMimeType: "application/json",
-    },
-  });
+  let rawText: string;
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_ID,
+      contents: userText,
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        temperature: 0.3,
+        responseMimeType: "application/json",
+      },
+    });
+    rawText = response.text ?? "";
+  } catch (err) {
+    // Network / API failure — counts toward the breaker.
+    recordFailure("gemini");
+    throw err;
+  }
 
-  const rawText = response.text ?? "";
   if (!rawText) {
+    // Empty body is a provider-side anomaly.
+    recordFailure("gemini");
     throw new GeminiParseError("Empty response from Gemini", "");
   }
 
-  return parseAndValidate(rawText, log);
+  // Parse errors below do NOT trip the breaker — they indicate a prompt /
+  // schema problem, not provider unavailability.
+  const parsed = parseAndValidate(rawText, log);
+  recordSuccess("gemini");
+  return parsed;
 }
 
 function parseAndValidate(raw: string, log: FastifyBaseLogger): GeminiAgentOutputParsed {
@@ -109,6 +130,14 @@ export async function safeGenerateAgentOutput(
   try {
     return await generateAgentOutput(userText, log, preferredIntent);
   } catch (err) {
+    if (err instanceof CircuitOpenError) {
+      log.warn({ provider: err.provider }, "Circuit open — skipping Gemini");
+      return {
+        reply: "I am temporarily unable to think that through. Please try again shortly.",
+        intent: "fallback",
+        card: null,
+      };
+    }
     if (err instanceof BudgetExceededError) {
       log.warn({ err }, "Gemini budget exceeded");
       return {
