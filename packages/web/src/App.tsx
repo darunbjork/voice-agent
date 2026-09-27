@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import type { LatencyBreakdown } from "@voice-agent/shared-types";
 import { useAudioCapture } from "./hooks/useAudioCapture.js";
 import { useDeepgramProxy } from "./hooks/useDeepgramProxy.js";
 import { useVAD } from "./hooks/useVAD.js";
@@ -10,6 +11,7 @@ import { VoiceAgentLayout } from "./components/VoiceAgent/VoiceAgent.js";
 import { ChatLog } from "./components/VoiceAgent/ChatLog.js";
 import { QuickActions } from "./components/VoiceAgent/QuickActions.js";
 import { TextInput } from "./components/VoiceAgent/TextInput.js";
+import { LatencyHUD } from "./components/VoiceAgent/LatencyHUD.js";
 import type { AgentVisualState } from "./components/VoiceAgent/StatusRing.js";
 import type { ChatMessageModel } from "./types/chat.js";
 import "./styles/globals.css";
@@ -25,6 +27,11 @@ export function App() {
   const [interim, setInterim] = useState("");
   const [messages, setMessages] = useState<ChatMessageModel[]>([]);
   const [agentThinking, setAgentThinking] = useState(false);
+  const [latency, setLatency] = useState<LatencyBreakdown | null>(null);
+
+  // TTS time-to-first-audio-byte tracking.
+  const ttsWaitStartedRef = useRef<number | null>(null);
+  const ttsFirstByteRef = useRef<boolean>(false);
 
   const appendLog = useCallback((line: string) => {
     setLog((prev) => [line, ...prev].slice(0, 20));
@@ -61,9 +68,34 @@ export function App() {
           card: msg.reply.card,
           intent: msg.reply.intent,
         });
+        // Prime the HUD with server-measured STT + LLM.
+        // TTS is 0 for now — the first audio chunk will fill it in.
+        setLatency({
+          stt: msg.reply.latencyMs.stt,
+          llm: msg.reply.latencyMs.llm,
+          tts: 0,
+          total: msg.reply.latencyMs.stt + msg.reply.latencyMs.llm,
+        });
+        ttsWaitStartedRef.current = performance.now();
+        ttsFirstByteRef.current = false;
         appendLog(`intent=${msg.reply.intent}`);
       },
       onTtsChunk: (audio, sequenceNum) => {
+        // Time-to-first-audio-byte: the number that matters for voice UX.
+        // Playback duration is not latency and would misreport.
+        if (!ttsFirstByteRef.current && ttsWaitStartedRef.current !== null) {
+          const firstByteMs = Math.round(performance.now() - ttsWaitStartedRef.current);
+          ttsFirstByteRef.current = true;
+          setLatency((prev) => {
+            if (!prev) return prev;
+            return {
+              stt: prev.stt,
+              llm: prev.llm,
+              tts: firstByteMs,
+              total: prev.stt + prev.llm + firstByteMs,
+            };
+          });
+        }
         void tts.enqueue(audio, sequenceNum);
       },
       onTtsDone: () => tts.markDone(),
@@ -237,6 +269,7 @@ export function App() {
         sessionId={proxy.sessionId}
         footer="Darun Mustafa · darun.dev"
       >
+        <LatencyHUD latency={latency} />
         <ChatLog messages={messages} interim={interim} />
 
         <QuickActions onAction={sendText} />
