@@ -30,5 +30,13 @@ describe("GET /health", () => {
     expect(typeof body.dailyTokens).toBe("number");
     expect(typeof body.correlationId).toBe("string");
     expect(body.correlationId.length).toBeGreaterThan(0);
+    expect(body.circuits).toHaveLength(3);
+    expect(body.circuits[0]).toEqual({
+      provider: "gemini",
+      state: "closed",
+      failures: 0,
+      openedAt: null,
+      lastFailureAt: null,
+    });
   });
 });

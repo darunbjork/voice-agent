@@ -3,6 +3,12 @@ import { env } from "../../env.js";
 import { mockTtsChunk } from "../../utils/voice-mock.js";
 import { assertWithinTtsBudget } from "../../utils/token-budget.js";
 import { incrementUsage } from "../../utils/usage-tracker.js";
+import {
+  assertCircuitClosed,
+  recordSuccess,
+  recordFailure,
+  CircuitOpenError,
+} from "../../utils/circuit-breaker.js";
 import type { ServerAudioMessage } from "@voice-agent/shared-types";
 
 export type TtsChunkHandler = (msg: ServerAudioMessage) => void;
@@ -26,7 +32,26 @@ export function streamTts(
   if (env.VOICE_MOCK) {
     return streamMockTts(text, onChunk, log, sessionId);
   }
-  return streamLiveTts(text, onChunk, log, sessionId);
+
+  try {
+    return streamLiveTts(text, onChunk, log, sessionId);
+  } catch (err) {
+    if (err instanceof CircuitOpenError) {
+      log.warn({ provider: err.provider }, "TTS circuit open — skipping");
+      onChunk({
+        type: "error",
+        code: "tts_circuit_open",
+        message: "Text to speech is temporarily unavailable.",
+      });
+      return {
+        cancelled: false,
+        cancel(): void {
+          onChunk({ type: "tts_done" });
+        },
+      };
+    }
+    throw err;
+  }
 }
 
 function streamMockTts(
@@ -113,6 +138,10 @@ function streamLiveTts(
     });
   };
 
+  // Pre-flight circuit check. Bubbles CircuitOpenError up synchronously so
+  // streamTts can convert it into a wire error message.
+  assertCircuitClosed("elevenlabs");
+
   void (async () => {
     try {
       const res = await fetch(url, {
@@ -131,6 +160,7 @@ function streamLiveTts(
 
       if (!res.ok || !res.body) {
         const errText = await res.text().catch(() => res.statusText);
+        recordFailure("elevenlabs");
         onChunk({
           type: "error",
           code: "tts_http_error",
@@ -150,11 +180,13 @@ function streamLiveTts(
       }
 
       if (!cancelled) {
+        recordSuccess("elevenlabs");
         emitDone();
         log.info({ sessionId, chunks: sequence }, "Live TTS done");
       }
     } catch (err) {
       if (cancelled) return;
+      recordFailure("elevenlabs");
       log.error({ err, sessionId }, "Live TTS failed");
       onChunk({
         type: "error",

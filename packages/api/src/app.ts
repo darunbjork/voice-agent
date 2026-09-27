@@ -16,6 +16,7 @@ import { BudgetExceededError } from "./utils/token-budget.js";
 import prismaPlugin from "./plugins/prisma.plugin.js";
 import redisPlugin from "./plugins/redis.plugin.js";
 import { audioRoutes } from "./modules/audio/audio.routes.js";
+import { initSentry } from "./sentry.js";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -111,6 +112,8 @@ export async function buildApp(): Promise<FastifyInstance> {
 }
 
 async function start(): Promise<void> {
+  initSentry();
+
   const app = await buildApp();
 
   try {
@@ -119,6 +122,7 @@ async function start(): Promise<void> {
     app.log.info(`Swagger UI → http://localhost:${env.PORT}/docs`);
     app.log.info(`Health     → http://localhost:${env.PORT}/health`);
     app.log.info(`VOICE_MOCK = ${env.VOICE_MOCK}`);
+    app.log.info(env.SENTRY_DSN ? "Sentry enabled" : "Sentry disabled (no SENTRY_DSN)");
   } catch (err) {
     app.log.error(err);
     process.exit(1);

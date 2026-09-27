@@ -2,6 +2,12 @@ import WebSocket from "ws";
 import type { FastifyBaseLogger } from "fastify";
 import { env } from "../../env.js";
 import { mockTranscriptFinal } from "../../utils/voice-mock.js";
+import {
+  assertCircuitClosed,
+  recordSuccess,
+  recordFailure,
+  CircuitOpenError,
+} from "../../utils/circuit-breaker.js";
 import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared-types";
 
 const DEEPGRAM_WS_URL =
@@ -23,6 +29,27 @@ export function createDeepgramProxy(
   if (env.VOICE_MOCK) {
     return createMockProxy(onTranscript, log, sessionId);
   }
+
+  try {
+    assertCircuitClosed("deepgram");
+  } catch (err) {
+    if (!(err instanceof CircuitOpenError)) throw err;
+
+    log.warn({ provider: err.provider }, "STT circuit open");
+    onTranscript({
+      type: "error",
+      code: "deepgram_circuit_open",
+      message: "Speech recognition is temporarily unavailable. Use text input.",
+    });
+
+    // Degraded proxy: the socket stays open so text_input still works.
+    return {
+      ready: false,
+      sendAudio(): void {},
+      close(): void {},
+    };
+  }
+
   return createLiveProxy(onTranscript, log, sessionId);
 }
 
@@ -83,6 +110,7 @@ function createLiveProxy(
   }
 
   let closed = false;
+  let sawError = false;
   const startTime = Date.now();
 
   const dg = new WebSocket(DEEPGRAM_WS_URL, {
@@ -92,6 +120,7 @@ function createLiveProxy(
   });
 
   dg.on("open", () => {
+    recordSuccess("deepgram");
     log.info({ sessionId }, "Deepgram live WebSocket open");
   });
 
@@ -130,6 +159,8 @@ function createLiveProxy(
   });
 
   dg.on("error", (err) => {
+    sawError = true;
+    recordFailure("deepgram");
     log.error({ err, sessionId }, "Deepgram WebSocket error");
     onTranscript({
       type: "error",
@@ -140,6 +171,10 @@ function createLiveProxy(
 
   dg.on("close", () => {
     log.info({ sessionId }, "Deepgram WebSocket closed");
+    if (!closed && !sawError) {
+      // Server dropped us mid-session — already counted if "error" fired.
+      recordFailure("deepgram");
+    }
     closed = true;
   });
 
