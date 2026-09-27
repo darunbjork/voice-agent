@@ -11,6 +11,7 @@ import { VoiceAgentLayout } from "./components/VoiceAgent/VoiceAgent.js";
 import { ChatLog } from "./components/VoiceAgent/ChatLog.js";
 import { QuickActions } from "./components/VoiceAgent/QuickActions.js";
 import { TextInput } from "./components/VoiceAgent/TextInput.js";
+import { MicButton } from "./components/VoiceAgent/MicButton.js";
 import { LatencyHUD } from "./components/VoiceAgent/LatencyHUD.js";
 import type { AgentVisualState } from "./components/VoiceAgent/StatusRing.js";
 import type { ChatMessageModel } from "./types/chat.js";
@@ -206,12 +207,6 @@ export function App() {
     interrupted: "#ef4444",
   };
 
-  const handleStart = async () => {
-    proxy.connect();
-    await capture.start();
-    appendLog("started");
-  };
-
   const handleStop = () => {
     tts.cancel();
     capture.stop();
@@ -228,6 +223,15 @@ export function App() {
     proxy.sendMessage({ type: "barge_in" });
     appendLog("manual barge-in");
   };
+
+  const micVariant: "idle" | "listening" | "speaking" | "interrupted" =
+    visualState === "interrupted"
+      ? "interrupted"
+      : visualState === "speaking"
+        ? "speaking"
+        : visualState === "listening"
+          ? "listening"
+          : "idle";
 
   return (
     <div
@@ -274,30 +278,29 @@ export function App() {
 
         <QuickActions onAction={sendText} />
 
+        <MicButton
+          isCapturing={capture.isCapturing}
+          onStart={async () => {
+            if (!proxy.isConnected) proxy.connect();
+            await capture.start();
+            appendLog("mic on");
+          }}
+          onStop={() => {
+            capture.stop();
+            appendLog("mic off");
+          }}
+          variant={micVariant}
+        />
+
         <div
           style={{
             display: "flex",
             gap: "0.6rem",
             flexWrap: "wrap",
+            justifyContent: "center",
             marginBottom: "0.85rem",
           }}
         >
-          <button
-            type="button"
-            onClick={handleStart}
-            disabled={capture.isCapturing}
-            style={primaryBtn}
-          >
-            {capture.isCapturing ? "Listening…" : "Start Mic"}
-          </button>
-          <button
-            type="button"
-            onClick={handleStop}
-            disabled={!capture.isCapturing && !proxy.isConnected}
-            style={ghostBtn}
-          >
-            Stop
-          </button>
           <button
             type="button"
             onClick={handleManualBarge}
@@ -309,6 +312,14 @@ export function App() {
             }}
           >
             Interrupt
+          </button>
+          <button
+            type="button"
+            onClick={handleStop}
+            disabled={!capture.isCapturing && !proxy.isConnected}
+            style={ghostBtn}
+          >
+            Disconnect
           </button>
         </div>
 
@@ -333,17 +344,6 @@ export function App() {
     </div>
   );
 }
-
-const primaryBtn: CSSProperties = {
-  background: "var(--iris)",
-  color: "#fff",
-  border: "none",
-  borderRadius: "var(--radius-sm)",
-  padding: "0.55rem 1.15rem",
-  fontWeight: 600,
-  fontSize: 13,
-  cursor: "pointer",
-};
 
 const ghostBtn: CSSProperties = {
   background: "transparent",
