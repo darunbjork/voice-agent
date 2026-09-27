@@ -12,6 +12,8 @@ import { ChatLog } from "./components/VoiceAgent/ChatLog.js";
 import { QuickActions } from "./components/VoiceAgent/QuickActions.js";
 import { TextInput } from "./components/VoiceAgent/TextInput.js";
 import { MicButton } from "./components/VoiceAgent/MicButton.js";
+import { SkipLink } from "./components/a11y/SkipLink.js";
+import { LiveRegion } from "./components/VoiceAgent/LiveRegion.js";
 import { AdminPage } from "./pages/AdminPage.js";
 import { LatencyHUD } from "./components/VoiceAgent/LatencyHUD.js";
 import type { AgentVisualState } from "./components/VoiceAgent/StatusRing.js";
@@ -230,8 +232,23 @@ export function App() {
           ? "listening"
           : "idle";
 
+  const liveMessage = {
+    idle: "Agent idle",
+    listening: "Listening",
+    processing: "Processing",
+    speaking: "Agent speaking",
+    interrupted: "Interrupted",
+  }[visualState];
+
   if (view === "admin") {
-    return <AdminPage onBack={() => setView("agent")} />;
+    return (
+      <>
+        <SkipLink />
+        <main id="main-content">
+          <AdminPage onBack={() => setView("agent")} />
+        </main>
+      </>
+    );
   }
 
   return (
@@ -249,6 +266,9 @@ export function App() {
         gap: "1.75rem",
       }}
     >
+      <SkipLink />
+      <LiveRegion message={liveMessage} />
+
       <header style={{ textAlign: "center", maxWidth: 480 }}>
         <h1
           style={{
@@ -277,66 +297,68 @@ export function App() {
         </button>
       </header>
 
-      <VoiceAgentLayout
-        visualState={visualState}
-        waveformBufferRef={waveform.bufferRef}
-        waveformColor={waveformColor[visualState]}
-        statusLabel={statusLabel[visualState]}
-        sessionId={proxy.sessionId}
-        footer="Darun Mustafa · darun.dev"
-      >
-        <LatencyHUD latency={latency} />
-        <ChatLog messages={messages} interim={interim} />
-
-        <QuickActions onAction={sendText} />
-
-        <MicButton
-          isCapturing={capture.isCapturing}
-          onStart={async () => {
-            if (!proxy.isConnected) proxy.connect();
-            await capture.start();
-            appendLog("mic on");
-          }}
-          onStop={() => {
-            capture.stop();
-            appendLog("mic off");
-          }}
-          variant={micVariant}
-        />
-
-        <div
-          style={{
-            display: "flex",
-            gap: "0.6rem",
-            flexWrap: "wrap",
-            justifyContent: "center",
-            marginBottom: "0.85rem",
-          }}
+      <main id="main-content">
+        <VoiceAgentLayout
+          visualState={visualState}
+          waveformBufferRef={waveform.bufferRef}
+          waveformColor={waveformColor[visualState]}
+          statusLabel={statusLabel[visualState]}
+          sessionId={proxy.sessionId}
+          footer="Darun Mustafa · darun.dev"
         >
-          <button
-            type="button"
-            onClick={handleManualBarge}
-            disabled={!tts.isPlaying}
+          <LatencyHUD latency={latency} />
+          <ChatLog messages={messages} interim={interim} />
+
+          <QuickActions onAction={sendText} />
+
+          <MicButton
+            isCapturing={capture.isCapturing}
+            onStart={async () => {
+              if (!proxy.isConnected) proxy.connect();
+              await capture.start();
+              appendLog("mic on");
+            }}
+            onStop={() => {
+              capture.stop();
+              appendLog("mic off");
+            }}
+            variant={micVariant}
+          />
+
+          <div
             style={{
-              ...ghostBtn,
-              color: "var(--error)",
-              borderColor: "var(--error)",
+              display: "flex",
+              gap: "0.6rem",
+              flexWrap: "wrap",
+              justifyContent: "center",
+              marginBottom: "0.85rem",
             }}
           >
-            Interrupt
-          </button>
-          <button
-            type="button"
-            onClick={handleStop}
-            disabled={!capture.isCapturing && !proxy.isConnected}
-            style={ghostBtn}
-          >
-            Disconnect
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={handleManualBarge}
+              disabled={!tts.isPlaying}
+              style={{
+                ...ghostBtn,
+                color: "var(--error)",
+                borderColor: "var(--error)",
+              }}
+            >
+              Interrupt
+            </button>
+            <button
+              type="button"
+              onClick={handleStop}
+              disabled={!capture.isCapturing && !proxy.isConnected}
+              style={ghostBtn}
+            >
+              Disconnect
+            </button>
+          </div>
 
-        <TextInput onSubmitText={sendText} />
-      </VoiceAgentLayout>
+          <TextInput onSubmitText={sendText} />
+        </VoiceAgentLayout>
+      </main>
 
       <div
         style={{

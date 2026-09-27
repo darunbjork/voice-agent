@@ -9,6 +9,7 @@ import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
 
 import { env } from "./env.js";
+import { getCorsOrigin } from "./config/cors.js";
 import { correlationIdHook } from "./middleware/correlation-id.js";
 import { healthRoutes } from "./modules/health/health.routes.js";
 import { agentRoutes } from "./modules/agent/agent.routes.js";
@@ -41,9 +42,12 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await app.register(fastifyCors, {
-    origin: env.FRONTEND_URL,
+    origin: getCorsOrigin(),
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["content-type", "x-correlation-id", "x-csrf-token", "authorization"],
+    exposedHeaders: ["x-correlation-id"],
+    maxAge: 600,
   });
 
   await app.register(fastifyCookie, {

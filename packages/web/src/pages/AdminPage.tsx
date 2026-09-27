@@ -46,10 +46,25 @@ type UsageSummary = {
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
+const AUTH_STORAGE_KEY = "voice-agent:admin-auth";
+
+function getAuthHeader(): string | null {
+  const raw = sessionStorage.getItem(AUTH_STORAGE_KEY);
+  return raw && raw.length > 0 ? `Basic ${raw}` : null;
+}
+
+function setAuthHeader(password: string): void {
+  const header = btoa(`admin:${password}`);
+  sessionStorage.setItem(AUTH_STORAGE_KEY, header);
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
+  const auth = getAuthHeader();
   const res = await fetch(`${API_BASE}${url}`, {
     credentials: "include",
+    headers: auth ? { authorization: auth } : undefined,
   });
+  if (res.status === 401) throw new Error("unauthorized");
   if (!res.ok) throw new Error(`${url} → ${res.status}`);
   return (await res.json()) as T;
 }
@@ -65,6 +80,8 @@ export function AdminPage({ onBack }: AdminPageProps) {
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [needPassword, setNeedPassword] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,8 +96,13 @@ export function AdminPage({ onBack }: AdminPageProps) {
       setSessions(listJson.sessions);
       setTotal(listJson.total);
       setUsage(usageJson);
+      setNeedPassword(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load admin data");
+      if (err instanceof Error && err.message === "unauthorized") {
+        setNeedPassword(true);
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to load admin data");
+      }
     } finally {
       setLoading(false);
     }
@@ -160,6 +182,41 @@ export function AdminPage({ onBack }: AdminPageProps) {
           }}
         >
           {error}
+        </div>
+      )}
+      {needPassword && (
+        <div style={{ ...panelStyle, marginBottom: "1rem" }}>
+          <h2 style={sectionTitle}>Admin login</h2>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!passwordInput) return;
+              setAuthHeader(passwordInput);
+              setPasswordInput("");
+              void load();
+            }}
+            style={{ display: "flex", gap: 8 }}
+          >
+            <input
+              type="password"
+              value={passwordInput}
+              onChange={(e) => setPasswordInput(e.target.value)}
+              placeholder="Admin password"
+              autoComplete="current-password"
+              style={{
+                flex: 1,
+                padding: "0.6rem 0.85rem",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--border)",
+                background: "var(--surface-2)",
+                color: "var(--text)",
+                fontSize: 14,
+              }}
+            />
+            <button type="submit" style={primaryBtn}>
+              Sign in
+            </button>
+          </form>
         </div>
       )}
       <section style={panelStyle}>
