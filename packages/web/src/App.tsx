@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties } from "react";
 import { useAudioCapture } from "./hooks/useAudioCapture.js";
 import { useDeepgramProxy } from "./hooks/useDeepgramProxy.js";
 import { useVAD } from "./hooks/useVAD.js";
@@ -8,6 +8,8 @@ import { useBargeIn } from "./hooks/useBargeIn.js";
 import { useWaveform } from "./hooks/useWaveform.js";
 import { VoiceAgentLayout } from "./components/VoiceAgent/VoiceAgent.js";
 import { ChatLog } from "./components/VoiceAgent/ChatLog.js";
+import { QuickActions } from "./components/VoiceAgent/QuickActions.js";
+import { TextInput } from "./components/VoiceAgent/TextInput.js";
 import type { AgentVisualState } from "./components/VoiceAgent/StatusRing.js";
 import type { ChatMessageModel } from "./types/chat.js";
 import "./styles/globals.css";
@@ -118,6 +120,27 @@ export function App() {
     },
   });
 
+  const sendText = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      if (tts.isPlaying) {
+        tts.cancel();
+        proxy.sendMessage({ type: "barge_in" });
+      }
+
+      if (!proxy.isConnected) {
+        proxy.connect();
+      }
+
+      tts.prepare();
+      proxy.sendMessage({ type: "text_input", text: trimmed });
+      appendLog(`text_input → ${trimmed.slice(0, 48)}`);
+    },
+    [proxy, tts, appendLog],
+  );
+
   const visualState: AgentVisualState = useMemo(() => {
     if (bargeIn.isTriggered || bargeIn.status === "cooldown") {
       return "interrupted";
@@ -143,8 +166,6 @@ export function App() {
     interrupted: "Interrupted",
   };
 
-  // Waveform colors use hex literals — Canvas does not resolve CSS variables
-  // in fillStyle. See ISSUE-024 in docs/issues-and-solutions.md.
   const waveformColor: Record<AgentVisualState, string> = {
     idle: "#64748b",
     listening: "#22c55e",
@@ -170,19 +191,10 @@ export function App() {
     appendLog("stopped");
   };
 
-  const handleTextSubmit = (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const form = e.currentTarget;
-    const input = form.elements.namedItem("text") as HTMLInputElement;
-    const text = input.value.trim();
-    if (!text) return;
-    if (!proxy.isConnected) proxy.connect();
-    tts.prepare();
-    // User bubble appears when the server echoes transcript_final.
-    // Do NOT push here or typed input produces two bubbles.
-    proxy.sendMessage({ type: "text_input", text });
-    input.value = "";
-    appendLog(`text → ${text.slice(0, 40)}`);
+  const handleManualBarge = () => {
+    tts.cancel();
+    proxy.sendMessage({ type: "barge_in" });
+    appendLog("manual barge-in");
   };
 
   return (
@@ -227,6 +239,8 @@ export function App() {
       >
         <ChatLog messages={messages} interim={interim} />
 
+        <QuickActions onAction={sendText} />
+
         <div
           style={{
             display: "flex",
@@ -253,11 +267,7 @@ export function App() {
           </button>
           <button
             type="button"
-            onClick={() => {
-              tts.cancel();
-              proxy.sendMessage({ type: "barge_in" });
-              appendLog("manual barge-in");
-            }}
+            onClick={handleManualBarge}
             disabled={!tts.isPlaying}
             style={{
               ...ghostBtn,
@@ -269,23 +279,7 @@ export function App() {
           </button>
         </div>
 
-        <form onSubmit={handleTextSubmit}>
-          <input
-            name="text"
-            placeholder="Type a message…"
-            autoComplete="off"
-            style={{
-              width: "100%",
-              padding: "0.75rem 1rem",
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--border)",
-              background: "var(--surface-2)",
-              color: "var(--text)",
-              fontSize: 14,
-              outline: "none",
-            }}
-          />
-        </form>
+        <TextInput onSubmitText={sendText} />
       </VoiceAgentLayout>
 
       <div
