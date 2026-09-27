@@ -33,18 +33,20 @@ export async function audioRoutes(
       sendSafe({ type: "agent_thinking" });
 
       try {
-        const { reply, viaFastPath } = await handleUtterance(
+        const { reply, pipelineMs } = await handleUtterance(
           {
             text: msg.text,
             sessionId,
-            turnIndex: 1, // session service tracks real index on Day 20
+            turnIndex: 1, // session service tracks the real index on Day 20
             sttLatencyMs: msg.latencyMs,
           },
           log,
         );
 
-        log.info({ intent: reply.intent, viaFastPath }, "Agent reply ready");
+        log.info({ intent: reply.intent, pipelineMs }, "WS agent pipeline done");
 
+        // Send the structured response BEFORE starting TTS
+        // so the card renders even if audio fails.
         sendSafe({ type: "agent_response", reply });
 
         currentTts?.cancel();
