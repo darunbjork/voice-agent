@@ -8,65 +8,55 @@ import { useBargeIn } from "./hooks/useBargeIn.js";
 import { useWaveform } from "./hooks/useWaveform.js";
 import { VoiceAgentLayout } from "./components/VoiceAgent/VoiceAgent.js";
 import type { AgentVisualState } from "./components/VoiceAgent/StatusRing.js";
+import type { ResponseCard } from "@voice-agent/shared-types";
 
 const VAD_MIN_SPEECH_MS = 100;
-
-const STATE_COLORS: Record<AgentVisualState, string> = {
-  idle: "#64748b",
-  listening: "#22c55e",
-  processing: "#f59e0b",
-  speaking: "#a78bfa",
-  interrupted: "#ef4444",
-};
-
-const STATE_LABELS: Record<AgentVisualState, string> = {
-  idle: "Idle",
-  listening: "Listening",
-  processing: "Processing",
-  speaking: "Speaking",
-  interrupted: "Interrupted",
-};
 
 export function App() {
   const [log, setLog] = useState<string[]>([]);
   const [interim, setInterim] = useState("");
   const [finalText, setFinalText] = useState("");
-  const [utterances, setUtterances] = useState<string[]>([]);
+  const [agentText, setAgentText] = useState("");
+  const [lastCard, setLastCard] = useState<ResponseCard | null>(null);
   const [agentThinking, setAgentThinking] = useState(false);
 
   const appendLog = useCallback((line: string) => {
-    setLog((prev) => [line, ...prev].slice(0, 40));
+    setLog((prev) => [line, ...prev].slice(0, 24));
   }, []);
 
   const tts = useTTSPlayer({
-    onDone: () => appendLog("TTS playback finished"),
-    onCancel: () => appendLog("TTS playback cancelled"),
+    onDone: () => appendLog("TTS done"),
+    onCancel: () => appendLog("TTS cancelled"),
   });
 
   const proxy = useDeepgramProxy({
     handlers: {
-      onSessionId: (id) => appendLog(`session_id → ${id}`),
+      onSessionId: (id) => appendLog(`session ${id.slice(0, 8)}`),
       onInterim: (text) => setInterim(text),
       onFinal: (text, latencyMs) => {
         setFinalText(text);
         setInterim("");
-        setUtterances((prev) => [text, ...prev].slice(0, 8));
-        appendLog(`FINAL → "${text}" (${latencyMs} ms)`);
+        appendLog(`final (${latencyMs}ms)`);
         tts.prepare();
+      },
+      onAgentThinking: () => {
+        setAgentThinking(true);
+        appendLog("thinking…");
+      },
+      onAgentResponse: (msg) => {
+        setAgentThinking(false);
+        setAgentText(msg.reply.text);
+        setLastCard(msg.reply.card);
+        appendLog(`intent=${msg.reply.intent}`);
       },
       onTtsChunk: (audio, sequenceNum) => {
         void tts.enqueue(audio, sequenceNum);
       },
       onTtsDone: () => tts.markDone(),
-      onAgentThinking: () => {
-        setAgentThinking(true);
-        appendLog("agent_thinking");
-      },
-      onAgentResponse: (msg) => {
+      onError: (code, message) => {
         setAgentThinking(false);
-        appendLog(`agent_response → intent=${msg.reply.intent} "${msg.reply.text}"`);
+        appendLog(`err ${code}: ${message}`);
       },
-      onError: (code, message) => appendLog(`error → ${code}: ${message}`),
       onMessage: (msg) => {
         const type = msg.type;
         if (
@@ -79,7 +69,7 @@ export function App() {
           type !== "agent_thinking" &&
           type !== "agent_response"
         ) {
-          appendLog(`msg → ${type}`);
+          appendLog(`msg ${type}`);
         }
       },
     },
@@ -91,8 +81,8 @@ export function App() {
     threshold: 0.02,
     minSpeechMs: VAD_MIN_SPEECH_MS,
     silenceDurationMs: 500,
-    onSpeechStart: () => appendLog("VAD → speech_start"),
-    onSpeechEnd: () => appendLog("VAD → speech_end (500 ms silence)"),
+    onSpeechStart: () => appendLog("speech_start"),
+    onSpeechEnd: () => appendLog("speech_end"),
   });
 
   const bargeIn = useBargeIn({
@@ -103,10 +93,8 @@ export function App() {
     minSpeechMs: 0,
     cooldownMs: 400,
     onBargeIn: (localWorkMs) => {
-      const totalMs = VAD_MIN_SPEECH_MS + localWorkMs;
-      appendLog(
-        `BARGE-IN fired — VAD ${VAD_MIN_SPEECH_MS} ms + local ${localWorkMs.toFixed(1)} ms ≈ ${totalMs.toFixed(1)} ms`,
-      );
+      const total = VAD_MIN_SPEECH_MS + localWorkMs;
+      appendLog(`barge-in ${total.toFixed(0)}ms`);
     },
   });
 
@@ -135,13 +123,26 @@ export function App() {
     capture.isCapturing,
   ]);
 
-  const statusLabel = STATE_LABELS[visualState];
-  const waveformColor = STATE_COLORS[visualState];
+  const statusLabel: Record<AgentVisualState, string> = {
+    idle: "Idle",
+    listening: "Listening",
+    processing: "Processing",
+    speaking: "Speaking",
+    interrupted: "Interrupted",
+  };
+
+  const waveformColor: Record<AgentVisualState, string> = {
+    idle: "var(--muted)",
+    listening: "var(--success)",
+    processing: "var(--ember)",
+    speaking: "var(--iris-soft)",
+    interrupted: "var(--error)",
+  };
 
   const handleStart = async () => {
     proxy.connect();
     await capture.start();
-    appendLog("capture + proxy started");
+    appendLog("started");
   };
 
   const handleStop = () => {
@@ -155,22 +156,17 @@ export function App() {
     appendLog("stopped");
   };
 
-  const handleManualBarge = () => {
-    tts.cancel();
-    proxy.sendMessage({ type: "barge_in" });
-    appendLog("manual barge_in");
-  };
-
   const handleTextSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = e.currentTarget;
     const input = form.elements.namedItem("text") as HTMLInputElement;
     const text = input.value.trim();
     if (!text) return;
+    if (!proxy.isConnected) proxy.connect();
     tts.prepare();
     proxy.sendMessage({ type: "text_input", text });
     input.value = "";
-    appendLog(`text_input → ${text}`);
+    appendLog(`text → ${text.slice(0, 40)}`);
   };
 
   return (
@@ -178,36 +174,71 @@ export function App() {
       style={{
         minHeight: "100vh",
         background: "var(--void)",
+        backgroundImage:
+          "radial-gradient(ellipse 80% 50% at 50% -20%, var(--iris-glow), transparent)",
         color: "var(--text)",
-        padding: "2rem",
+        padding: "2rem 1.25rem 3rem",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        gap: "1.5rem",
+        gap: "1.75rem",
       }}
     >
-      <header style={{ textAlign: "center" }}>
-        <h1 style={{ margin: "0 0 0.35rem", fontSize: 28, fontWeight: 700 }}>Voice Agent</h1>
-        <p style={{ margin: 0, color: "var(--muted)", fontSize: 14 }}>Waveform + Status Ring</p>
+      <header style={{ textAlign: "center", maxWidth: 480 }}>
+        <h1
+          style={{
+            margin: "0 0 0.4rem",
+            fontFamily: "var(--font-display)",
+            fontSize: "clamp(1.75rem, 4vw, 2.15rem)",
+            fontWeight: 700,
+            letterSpacing: "-0.03em",
+          }}
+        >
+          Voice Agent
+        </h1>
+        <p
+          style={{
+            margin: 0,
+            color: "var(--muted)",
+            fontSize: 14,
+            lineHeight: 1.5,
+          }}
+        >
+          Production voice pipeline · Deepgram · Gemini · ElevenLabs
+        </p>
       </header>
 
       <VoiceAgentLayout
         visualState={visualState}
         waveformBufferRef={waveform.bufferRef}
-        waveformColor={waveformColor}
-        statusLabel={statusLabel}
+        waveformColor={waveformColor[visualState]}
+        statusLabel={statusLabel[visualState]}
+        sessionId={proxy.sessionId}
+        footer="Darun Mustafa · darun.dev"
       >
         <div
           style={{
             background: "var(--surface-2)",
-            borderRadius: 12,
-            padding: "0.85rem 1rem",
+            borderRadius: "var(--radius-md)",
+            border: "1px solid var(--border)",
+            padding: "0.9rem 1rem",
             marginBottom: "1rem",
-            minHeight: 56,
+            minHeight: 72,
           }}
         >
-          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>Transcript</div>
-          <div style={{ fontSize: 16 }}>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 500,
+              color: "var(--muted)",
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              marginBottom: 6,
+            }}
+          >
+            Transcript
+          </div>
+          <div style={{ fontSize: 15, lineHeight: 1.45 }}>
             {finalText && <span>{finalText}</span>}
             {interim && (
               <span
@@ -219,129 +250,168 @@ export function App() {
                 {interim}
               </span>
             )}
-            {!finalText && !interim && <span style={{ color: "var(--muted)" }}>…</span>}
+            {!finalText && !interim && (
+              <span style={{ color: "var(--muted)" }}>Speak or type to begin…</span>
+            )}
           </div>
+          {agentText && (
+            <div
+              style={{
+                marginTop: 10,
+                paddingTop: 10,
+                borderTop: "1px solid var(--border)",
+                fontSize: 14,
+                color: "var(--iris-soft)",
+              }}
+            >
+              {agentText}
+            </div>
+          )}
         </div>
+
+        {lastCard && (
+          <div
+            style={{
+              background: "var(--surface)",
+              border: "1px solid var(--border-hover)",
+              borderRadius: "var(--radius-md)",
+              padding: "0.75rem 1rem",
+              marginBottom: "1rem",
+              fontSize: 13,
+            }}
+          >
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 11,
+                color: "var(--iris-soft)",
+                textTransform: "uppercase",
+              }}
+            >
+              {lastCard.type}
+            </span>
+            <pre
+              style={{
+                margin: "0.4rem 0 0",
+                fontFamily: "var(--font-mono)",
+                fontSize: 11,
+                color: "var(--muted)",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              {JSON.stringify(lastCard, null, 2)}
+            </pre>
+          </div>
+        )}
+
         <div
           style={{
             display: "flex",
-            gap: "0.75rem",
+            gap: "0.6rem",
             flexWrap: "wrap",
-            marginBottom: "1rem",
+            marginBottom: "0.85rem",
           }}
         >
-          <button onClick={handleStart} disabled={capture.isCapturing} style={btnStyle}>
-            Start Mic
+          <button
+            type="button"
+            onClick={handleStart}
+            disabled={capture.isCapturing}
+            style={primaryBtn}
+          >
+            {capture.isCapturing ? "Listening…" : "Start Mic"}
           </button>
           <button
+            type="button"
             onClick={handleStop}
-            disabled={!capture.isCapturing && proxy.status === "disconnected"}
-            style={btnStyle}
+            disabled={!capture.isCapturing && !proxy.isConnected}
+            style={ghostBtn}
           >
             Stop
           </button>
           <button
-            onClick={handleManualBarge}
+            type="button"
+            onClick={() => {
+              tts.cancel();
+              proxy.sendMessage({ type: "barge_in" });
+              appendLog("manual barge-in");
+            }}
             disabled={!tts.isPlaying}
-            style={{ ...btnStyle, background: "var(--error)" }}
+            style={{
+              ...ghostBtn,
+              color: "var(--error)",
+              borderColor: "var(--error)",
+            }}
           >
             Interrupt
           </button>
         </div>
+
         <form onSubmit={handleTextSubmit}>
           <input
             name="text"
-            placeholder="Type instead of speaking…"
+            placeholder="Type a message…"
+            autoComplete="off"
             style={{
               width: "100%",
-              padding: "0.7rem 1rem",
-              borderRadius: 10,
+              padding: "0.75rem 1rem",
+              borderRadius: "var(--radius-md)",
               border: "1px solid var(--border)",
               background: "var(--surface-2)",
               color: "var(--text)",
               fontSize: 14,
-              boxSizing: "border-box",
+              outline: "none",
+            }}
+            onFocus={(e) => {
+              e.currentTarget.style.borderColor = "var(--iris)";
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = "var(--border)";
             }}
           />
         </form>
-        <div
-          style={{
-            marginTop: "0.85rem",
-            fontSize: 12,
-            color: "var(--muted)",
-            display: "flex",
-            gap: "0.75rem",
-            flexWrap: "wrap",
-          }}
-        >
-          <span>capture: {capture.status}</span>
-          <span>proxy: {proxy.status}</span>
-          <span>vad: {vad.state}</span>
-          <span>tts: {tts.status}</span>
-          <span>barge: {bargeIn.status}</span>
-          {bargeIn.lastLocalWorkMs !== null && (
-            <span>local: {bargeIn.lastLocalWorkMs.toFixed(1)} ms</span>
-          )}
-        </div>
       </VoiceAgentLayout>
-      {log.length > 0 && (
-        <div
-          style={{
-            width: "100%",
-            maxWidth: 440,
-            fontFamily: "ui-monospace, monospace",
-            fontSize: 11,
-            color: "var(--muted)",
-            maxHeight: 140,
-            overflow: "auto",
-          }}
-        >
-          {log.slice(0, 12).map((line, i) => (
-            <div key={i} style={{ padding: "1px 0" }}>
-              {line}
-            </div>
-          ))}
-        </div>
-      )}
 
-      {utterances.length > 0 && (
-        <div
-          style={{
-            width: "100%",
-            maxWidth: 440,
-            fontSize: 13,
-            color: "var(--text)",
-          }}
-        >
-          <div
-            style={{
-              color: "var(--muted)",
-              marginBottom: 6,
-              fontSize: 12,
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-            }}
-          >
-            Recent
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 480,
+          fontFamily: "var(--font-mono)",
+          fontSize: 11,
+          color: "var(--muted)",
+          maxHeight: 120,
+          overflow: "auto",
+          opacity: 0.85,
+        }}
+      >
+        {log.map((line, i) => (
+          <div key={i} style={{ padding: "1px 0" }}>
+            {line}
           </div>
-          {utterances.map((u, i) => (
-            <div key={i} style={{ marginBottom: 3, opacity: 1 - i * 0.08 }}>
-              “{u}”
-            </div>
-          ))}
-        </div>
-      )}
+        ))}
+      </div>
     </div>
   );
 }
 
-const btnStyle: CSSProperties = {
+const primaryBtn: CSSProperties = {
   background: "var(--iris)",
-  color: "white",
+  color: "#fff",
   border: "none",
-  borderRadius: 10,
-  padding: "0.55rem 1.1rem",
-  cursor: "pointer",
+  borderRadius: "var(--radius-sm)",
+  padding: "0.55rem 1.15rem",
   fontWeight: 600,
-  fontSize: 14,
+  fontSize: 13,
+  cursor: "pointer",
+};
+
+const ghostBtn: CSSProperties = {
+  background: "transparent",
+  color: "var(--text)",
+  border: "1px solid var(--border-hover)",
+  borderRadius: "var(--radius-sm)",
+  padding: "0.55rem 1.15rem",
+  fontWeight: 500,
+  fontSize: 13,
+  cursor: "pointer",
 };

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { GlassCard } from "./GlassCard.js";
 import { StatusRing, type AgentVisualState } from "./StatusRing.js";
 import { WaveformCanvas } from "./WaveformCanvas.js";
 
@@ -7,7 +8,9 @@ export type VoiceAgentLayoutProps = {
   waveformBufferRef: React.RefObject<number[]>;
   waveformColor: string;
   statusLabel: string;
+  sessionId: string | null;
   children?: ReactNode;
+  footer?: ReactNode;
 };
 
 export function VoiceAgentLayout({
@@ -15,66 +18,109 @@ export function VoiceAgentLayout({
   waveformBufferRef,
   waveformColor,
   statusLabel,
+  sessionId,
   children,
+  footer,
 }: VoiceAgentLayoutProps) {
   return (
     <div
       style={{
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        borderRadius: 20,
-        padding: "1.75rem",
-        backdropFilter: "var(--blur)",
-        boxShadow: "0 20px 50px rgba(0,0,0,0.4)",
         width: "100%",
-        maxWidth: 440,
+        maxWidth: 480,
+        margin: "0 auto",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "1.25rem",
-          marginBottom: "1.25rem",
-        }}
-      >
-        <StatusRing state={visualState} size={72} />
-        <div>
-          <div
-            style={{
-              fontSize: 12,
-              color: "var(--muted)",
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-              marginBottom: 4,
-            }}
-          >
-            Status
+      <GlassCard>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "1.5rem",
+            gap: "1rem",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+            <StatusRing state={visualState} size={64} />
+            <div>
+              <div
+                style={{
+                  fontFamily: "var(--font-display)",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "var(--muted)",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  marginBottom: 2,
+                }}
+              >
+                Status
+              </div>
+              <div
+                style={{
+                  fontFamily: "var(--font-display)",
+                  fontSize: 20,
+                  fontWeight: 700,
+                  letterSpacing: "-0.02em",
+                }}
+              >
+                {statusLabel}
+              </div>
+            </div>
           </div>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>{statusLabel}</div>
+          {sessionId && (
+            <div
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 11,
+                color: "var(--muted)",
+                background: "var(--surface-2)",
+                padding: "0.35rem 0.6rem",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--border)",
+              }}
+              title={sessionId}
+            >
+              {sessionId.slice(0, 8)}
+            </div>
+          )}
         </div>
-      </div>
 
-      <div
-        style={{
-          background: "var(--surface-2)",
-          borderRadius: 12,
-          padding: "0.75rem 1rem",
-          marginBottom: "1.25rem",
-          display: "flex",
-          justifyContent: "center",
-        }}
-      >
-        <WaveformCanvas
-          bufferRef={waveformBufferRef}
-          color={waveformColor}
-          width={280}
-          height={56}
-          barCount={64}
-        />
-      </div>
+        <div
+          style={{
+            background: "var(--surface-2)",
+            borderRadius: "var(--radius-md)",
+            border: "1px solid var(--border)",
+            padding: "0.85rem 1rem",
+            marginBottom: "1.25rem",
+            display: "flex",
+            justifyContent: "center",
+          }}
+        >
+          <WaveformCanvas
+            bufferRef={waveformBufferRef}
+            color={waveformColor}
+            width={300}
+            height={56}
+            barCount={64}
+          />
+        </div>
 
-      {children}
+        {children}
+      </GlassCard>
+
+      {footer && (
+        <div
+          style={{
+            marginTop: "1rem",
+            textAlign: "center",
+            fontSize: 12,
+            color: "var(--muted)",
+          }}
+        >
+          {footer}
+        </div>
+      )}
     </div>
   );
 }
