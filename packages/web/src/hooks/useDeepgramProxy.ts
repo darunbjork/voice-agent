@@ -127,7 +127,9 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
         clearReconnectTimer();
         try {
           ws.close();
-        } catch {}
+        } catch {
+          // close() throws if the socket is already closed
+        }
       },
       { once: true },
     );
@@ -220,7 +222,9 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
     if (ws) {
       try {
         ws.close();
-      } catch {}
+      } catch {
+        // close() throws if the socket is already closed
+      }
     }
     wsRef.current = null;
     setStatus("disconnected");

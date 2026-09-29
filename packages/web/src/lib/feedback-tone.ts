@@ -78,5 +78,7 @@ export function playFeedbackTone(kind: FeedbackTone): void {
     for (const note of TONES[kind]) {
       playNote(ac, note);
     }
-  } catch {}
+  } catch {
+    // feedback tone is best-effort; a blocked AudioContext must not break the UI
+  }
 }

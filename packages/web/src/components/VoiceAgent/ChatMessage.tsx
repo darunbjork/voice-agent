@@ -1,11 +1,29 @@
 import type { ChatMessageModel } from "../../types/chat.js";
 import { ResponseCardView } from "../cards/ResponseCardView.js";
+import { revealTokens } from "../../state/response-reveal.js";
 
 export type ChatMessageProps = {
   message: ChatMessageModel;
+  revealedWords?: number;
 };
 
-export function ChatMessage({ message }: ChatMessageProps) {
+function RevealText({ text, revealedWords }: { text: string; revealedWords: number }) {
+  return (
+    <>
+      {revealTokens(text).map((token, index) =>
+        token.wordIndex !== null && token.wordIndex >= revealedWords ? (
+          <span key={index} style={{ opacity: 0 }}>
+            {token.text}
+          </span>
+        ) : (
+          token.text
+        ),
+      )}
+    </>
+  );
+}
+
+export function ChatMessage({ message, revealedWords }: ChatMessageProps) {
   const isUser = message.role === "user";
 
   return (
@@ -26,7 +44,13 @@ export function ChatMessage({ message }: ChatMessageProps) {
           color: isUser ? "#fff" : "var(--text)",
         }}
       >
-        <div style={{ fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{message.text}</div>
+        <div style={{ fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
+          {revealedWords === undefined ? (
+            message.text
+          ) : (
+            <RevealText text={message.text} revealedWords={revealedWords} />
+          )}
+        </div>
         {!isUser && message.card && <ResponseCardView card={message.card} />}
         {!isUser && message.intent && (
           <div

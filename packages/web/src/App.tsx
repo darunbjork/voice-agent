@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import type { LatencyBreakdown } from "@voice-agent/shared-types";
 import { useAudioCapture } from "./hooks/useAudioCapture.js";
 import { useDeepgramProxy } from "./hooks/useDeepgramProxy.js";
@@ -18,8 +17,11 @@ import { AdminPage } from "./pages/AdminPage.js";
 import { LatencyHUD, type LatencyStage } from "./components/VoiceAgent/LatencyHUD.js";
 import type { AgentState } from "./state/agent-state.js";
 import { agentReducer, initialAgentSnapshot } from "./state/agent-state.js";
+import { composeLiveMessage } from "./state/live-message.js";
+import { initialRevealState, revealReducer } from "./state/response-reveal.js";
 import type { ChatMessageModel } from "./types/chat.js";
 import { playFeedbackTone } from "./lib/feedback-tone.js";
+import { prefersReducedMotion } from "./lib/motion.js";
 import "./styles/globals.css";
 
 const VAD_MIN_SPEECH_MS = 100;
@@ -44,15 +46,6 @@ const waveformColor: Record<AgentState, string> = {
   speaking: "#a78bfa",
   error: "#ef4444",
   disconnected: "#64748b",
-};
-
-const liveMessage: Record<AgentState, string> = {
-  idle: "Agent idle",
-  listening: "Listening",
-  processing: "Processing",
-  speaking: "Agent speaking",
-  error: "Something went wrong",
-  disconnected: "Disconnected",
 };
 
 export function App() {
@@ -89,12 +82,23 @@ export function App() {
     setMessages((prev) => [...prev, { ...msg, id: newId(), createdAt: new Date().toISOString() }]);
   }, []);
 
+  const [reveal, dispatchReveal] = useReducer(revealReducer, initialRevealState);
+
+  const waveform = useWaveform(64);
+
   const tts = useTTSPlayer({
     onDone: () => {
       appendLog("TTS done");
       dispatchAgent({ type: "TTS_DONE" });
+      dispatchReveal({ type: "COMPLETE" });
     },
-    onCancel: () => appendLog("TTS cancelled"),
+    onCancel: () => {
+      appendLog("TTS cancelled");
+      dispatchReveal({ type: "COMPLETE" });
+    },
+    onLevel: (rms) => {
+      if (agent.state === "speaking") waveform.feed(rms);
+    },
   });
 
   const proxy = useDeepgramProxy({
@@ -135,6 +139,13 @@ export function App() {
         });
         ttsWaitStartedRef.current = performance.now();
         ttsFirstByteRef.current = false;
+        if (typeof tts.getProgress === "function") {
+          dispatchReveal({
+            type: "START",
+            text: msg.reply.text,
+            reduced: prefersReducedMotion(),
+          });
+        }
         appendLog(`intent=${msg.reply.intent}`);
       },
       onTtsChunk: (audio, sequenceNum) => {
@@ -161,6 +172,7 @@ export function App() {
       },
       onError: (code, message) => {
         dispatchAgent({ type: "FAILED" });
+        dispatchReveal({ type: "COMPLETE" });
         setStage(null);
         appendLog(`err ${code}: ${message}`);
         flashFeedback(`Error: ${message}`);
@@ -182,8 +194,6 @@ export function App() {
       },
     },
   });
-
-  const waveform = useWaveform(64);
 
   const vad = useVAD({
     threshold: 0.02,
@@ -211,7 +221,7 @@ export function App() {
     onChunk: (chunk) => proxy.sendAudio(chunk),
     onRms: (rms) => {
       vad.feed(rms);
-      waveform.feed(rms);
+      if (agent.state !== "speaking") waveform.feed(rms);
     },
   });
 
@@ -224,8 +234,22 @@ export function App() {
     }
     if (capture.status === "idle") {
       dispatchAgent({ type: "MIC_OFF" });
+      waveform.reset();
     }
   }, [capture.status]);
+
+  useEffect(() => {
+    if (reveal.status !== "revealing") return;
+    if (typeof tts.getProgress !== "function") {
+      dispatchReveal({ type: "COMPLETE" });
+      return;
+    }
+    let frame = requestAnimationFrame(function tick() {
+      dispatchReveal({ type: "PROGRESS", progress: tts.getProgress() });
+      frame = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [reveal.status, tts.getProgress]);
 
   useEffect(() => {
     if (capture.status !== "error") return;
@@ -328,7 +352,7 @@ export function App() {
       }}
     >
       <SkipLink />
-      <LiveRegion message={liveMessage[visualState]} />
+      <LiveRegion message={composeLiveMessage(visualState, agent.micOn)} />
 
       <header style={{ textAlign: "center", maxWidth: 480 }}>
         <h1
@@ -348,11 +372,8 @@ export function App() {
         <button
           type="button"
           onClick={() => setView("admin")}
-          style={{
-            ...ghostBtn,
-            fontSize: 12,
-            padding: "0.35rem 0.75rem",
-          }}
+          className="btn-ghost"
+          style={{ fontSize: 12, padding: "0.35rem 0.75rem" }}
         >
           Admin
         </button>
@@ -361,6 +382,7 @@ export function App() {
       <main id="main-content">
         <VoiceAgentLayout
           visualState={visualState}
+          micOn={agent.micOn}
           waveformBufferRef={waveform.bufferRef}
           waveformColor={waveformColor[visualState]}
           statusLabel={statusLabel[visualState]}
@@ -384,7 +406,11 @@ export function App() {
           )}
 
           <LatencyHUD latency={latency} stage={stage} />
-          <ChatLog messages={messages} interim={interim} />
+          <ChatLog
+            messages={messages}
+            interim={interim}
+            revealedWords={reveal.status === "revealing" ? reveal.revealedWords : undefined}
+          />
 
           <QuickActions onAction={sendText} />
 
@@ -430,8 +456,8 @@ export function App() {
               disabled={!tts.isPlaying || bargeIn.status === "cooldown"}
               title="Stop the agent mid-sentence"
               aria-label="Interrupt agent speech"
+              className="btn-ghost"
               style={{
-                ...ghostBtn,
                 color: "var(--ember)",
                 borderColor: "rgba(245, 158, 11, 0.55)",
               }}
@@ -443,7 +469,7 @@ export function App() {
               onClick={handleStop}
               disabled={!capture.isCapturing && !proxy.isConnected}
               title="Turn off the microphone and close the session"
-              style={ghostBtn}
+              className="btn-ghost"
             >
               Disconnect
             </button>
@@ -471,14 +497,3 @@ export function App() {
     </div>
   );
 }
-
-const ghostBtn: CSSProperties = {
-  background: "transparent",
-  color: "var(--text)",
-  border: "1px solid var(--border-hover)",
-  borderRadius: "var(--radius-sm)",
-  padding: "0.55rem 1.15rem",
-  fontWeight: 500,
-  fontSize: 13,
-  cursor: "pointer",
-};

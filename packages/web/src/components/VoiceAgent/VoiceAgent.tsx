@@ -3,9 +3,11 @@ import { GlassCard } from "./GlassCard.js";
 import { StatusRing } from "./StatusRing.js";
 import type { AgentState } from "../../state/agent-state.js";
 import { WaveformCanvas } from "./WaveformCanvas.js";
+import { visualizerCaption } from "../../lib/visualizer.js";
 
 export type VoiceAgentLayoutProps = {
   visualState: AgentState;
+  micOn: boolean;
   waveformBufferRef: React.RefObject<number[]>;
   waveformColor: string;
   statusLabel: string;
@@ -17,6 +19,7 @@ export type VoiceAgentLayoutProps = {
 
 export function VoiceAgentLayout({
   visualState,
+  micOn,
   waveformBufferRef,
   waveformColor,
   statusLabel,
@@ -70,6 +73,15 @@ export function VoiceAgentLayout({
               >
                 {statusLabel}
               </div>
+              <span className={micOn ? "mic-chip mic-chip--on" : "mic-chip"}>
+                <span className="mic-chip__dot" aria-hidden="true" />
+                {micOn ? "Mic on" : "Mic off"}
+                <span className="sr-only">
+                  {micOn
+                    ? " — microphone is capturing audio, you can interrupt"
+                    : " — microphone is not capturing audio"}
+                </span>
+              </span>
             </div>
           </div>
           {sessionId && (
@@ -98,7 +110,9 @@ export function VoiceAgentLayout({
             padding: "0.85rem 1rem",
             marginBottom: "1.25rem",
             display: "flex",
-            justifyContent: "center",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 8,
           }}
         >
           <WaveformCanvas
@@ -108,6 +122,16 @@ export function VoiceAgentLayout({
             height={56}
             barCount={64}
           />
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              color: "var(--muted)",
+              letterSpacing: "0.04em",
+            }}
+          >
+            {visualizerCaption(visualState)}
+          </span>
         </div>
 
         {children}

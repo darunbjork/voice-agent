@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type BargeInStatus =
-  | "idle" // TTS not playing — nothing to interrupt
-  | "armed" // TTS is playing — watching for user speech
-  | "triggered" // barge-in fired this tick
-  | "cooldown"; // brief mute after a trigger to prevent re-fire loops
+export type BargeInStatus = "idle" | "armed" | "triggered" | "cooldown";
 
 export type UseBargeInOptions = {
   isTtsPlaying: boolean;
@@ -89,7 +85,6 @@ export function useBargeIn(options: UseBargeInOptions) {
     }
   }, [isUserSpeaking, status, minSpeechMs, cancelTts, sendBargeIn, cooldownMs, clearCooldownTimer]);
 
-  // Cleanup
   useEffect(() => {
     return () => {
       clearCooldownTimer();

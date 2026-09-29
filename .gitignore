@@ -12,3 +12,4 @@ packages/api/.env
 # Markdown stays local — never committed, never rendered on GitHub
 *.md
 !/README.md
+RULES.md

@@ -1,29 +1,18 @@
 import { useEffect, useRef } from "react";
 import gsap from "gsap";
 import type { AgentState } from "../../state/agent-state.js";
+import { STATE_RING_COLORS, STATIC_RING_SPECS } from "../../lib/status-ring.js";
+import { useReducedMotion } from "../../lib/motion.js";
 
 export type StatusRingProps = {
   state: AgentState;
   size?: number;
 };
 
-const STATE_COLORS: Record<AgentState, string> = {
-  idle: "#94a3b8",
-  listening: "#22c55e",
-  processing: "#f59e0b",
-  speaking: "#a78bfa",
-  error: "#ef4444",
-  disconnected: "#64748b",
-};
-
-function prefersReducedMotion(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
 export function StatusRing({ state, size = 72 }: StatusRingProps) {
   const ringRef = useRef<SVGCircleElement>(null);
   const glowRef = useRef<SVGCircleElement>(null);
+  const reduce = useReducedMotion();
 
   useEffect(() => {
     const ring = ringRef.current;
@@ -32,7 +21,22 @@ export function StatusRing({ state, size = 72 }: StatusRingProps) {
 
     gsap.killTweensOf([ring, glow]);
 
-    const color = STATE_COLORS[state];
+    const color = STATE_RING_COLORS[state];
+
+    if (reduce) {
+      const spec = STATIC_RING_SPECS[state];
+      gsap.set(ring, {
+        stroke: color,
+        strokeDasharray: spec.dasharray ?? "none",
+        rotation: 0,
+        opacity: 1,
+        attr: { "stroke-width": spec.strokeWidth },
+      });
+      gsap.set(glow, { stroke: color, opacity: spec.glowOpacity });
+      return () => {
+        gsap.killTweensOf([ring, glow]);
+      };
+    }
 
     gsap.set(ring, {
       stroke: color,
@@ -108,23 +112,20 @@ export function StatusRing({ state, size = 72 }: StatusRingProps) {
 
       case "idle":
       default:
-        // Ready-state breathing glow so the ring reads as "on", not dead.
-        if (!prefersReducedMotion()) {
-          gsap.to(glow, {
-            opacity: 0.42,
-            duration: 2.4,
-            yoyo: true,
-            repeat: -1,
-            ease: "sine.inOut",
-          });
-        }
+        gsap.to(glow, {
+          opacity: 0.42,
+          duration: 2.4,
+          yoyo: true,
+          repeat: -1,
+          ease: "sine.inOut",
+        });
         break;
     }
 
     return () => {
       gsap.killTweensOf([ring, glow]);
     };
-  }, [state]);
+  }, [state, reduce]);
 
   const r = (size - 10) / 2;
   const c = size / 2;

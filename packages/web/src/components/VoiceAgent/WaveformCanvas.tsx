@@ -1,4 +1,6 @@
 import { useEffect, useRef } from "react";
+import { computeBarHeights, MIN_BAR_HEIGHT } from "../../lib/waveform.js";
+import { useReducedMotion } from "../../lib/motion.js";
 
 export type WaveformCanvasProps = {
   bufferRef: React.RefObject<number[]>;
@@ -21,6 +23,7 @@ export function WaveformCanvas({
   const rafRef = useRef<number>(0);
   const colorRef = useRef(color);
   colorRef.current = color;
+  const reduced = useReducedMotion();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -39,6 +42,7 @@ export function WaveformCanvas({
 
     const draw = (): void => {
       const samples = bufferRef.current ?? [];
+      const heights = computeBarHeights(samples, barCount, height, reduced);
       ctx.clearRect(0, 0, width, height);
 
       if (background !== "transparent") {
@@ -46,12 +50,11 @@ export function WaveformCanvas({
         ctx.fillRect(0, 0, width, height);
       }
 
-      const offset = barCount - samples.length;
+      const offset = barCount - heights.length;
       ctx.fillStyle = colorRef.current;
 
-      for (let i = 0; i < samples.length; i++) {
-        const amplitude = samples[i] ?? 0;
-        const barHeight = Math.max(2, Math.min(height, amplitude * height * 1.8));
+      for (let i = 0; i < heights.length; i++) {
+        const barHeight = heights[i] ?? MIN_BAR_HEIGHT;
         const x = (offset + i) * barWidth;
         const y = (height - barHeight) / 2;
 
@@ -60,12 +63,14 @@ export function WaveformCanvas({
         ctx.fill();
       }
 
-      rafRef.current = requestAnimationFrame(draw);
+      if (!reduced) {
+        rafRef.current = requestAnimationFrame(draw);
+      }
     };
 
-    rafRef.current = requestAnimationFrame(draw);
+    draw();
     return () => cancelAnimationFrame(rafRef.current);
-  }, [bufferRef, background, width, height, barCount]);
+  }, [bufferRef, background, width, height, barCount, reduced]);
 
   return (
     <canvas

@@ -21,9 +21,9 @@
   "tasks": {
     "build": { "dependsOn": ["^build"], "outputs": ["dist/**"] },
     "dev": { "dependsOn": ["^build"], "cache": false, "persistent": true },
-    "lint": { "outputs": [] },
     "type-check": { "dependsOn": ["^build"], "outputs": [] },
     "test": { "dependsOn": ["^build"], "outputs": [] },
+    "test:coverage": { "dependsOn": ["^build"], "outputs": [] },
     "clean": { "cache": false }
   }
 }
