@@ -31,7 +31,7 @@ function withState(snapshot: AgentSnapshot, state: AgentState): AgentSnapshot {
 export function agentReducer(snapshot: AgentSnapshot, event: AgentEvent): AgentSnapshot {
   switch (event.type) {
     case "CONNECTED":
-      if (snapshot.state !== "disconnected") return snapshot;
+      if (snapshot.state !== "disconnected" && snapshot.state !== "error") return snapshot;
       return withState(snapshot, snapshot.micOn ? "listening" : "idle");
 
     case "DISCONNECTED":
