@@ -40,7 +40,7 @@
 | Capture frame interval before Phase 2 (2048 samples @ 16 kHz) | 128.0 ms | git history: same line before commit 93b4a81 |
 | VAD speech-detection window for voice barge-in | >=100 ms and <=132 ms (minSpeechMs + one frame) | packages/web/src/App.tsx VAD_MIN_SPEECH_MS=100 + frame interval above |
 | Voice barge-in floor (VAD window + synchronous cancel + next paint) | <=149 ms (132 + 0 + 16.7), i.e. within the 300 ms target on paper | derived: vad-window + synchronous tts.cancel() + one rAF frame (16.7 ms @ 60 Hz) |
-| Mock STT final after the 8th audio chunk | >=256 ms of captured audio (8 x 32 ms) | packages/api/src/modules/audio/deepgram.proxy.ts:94 (chunkCount === 8) |
+| Mock STT final after the 8th audio chunk | >=256 ms of captured audio (8 x 32 ms) | packages/api/src/modules/audio/deepgram.proxy.ts (mock final after the 8th chunk of one audio burst) |
 | Mock TTS chunk cadence | 40 ms between chunks, 3-8 chunks per reply | packages/api/src/modules/audio/elevenlabs.service.ts:77 (setTimeout 40 * i) |
 
 ## Attempts and fallbacks
