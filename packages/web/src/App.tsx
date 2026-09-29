@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { LatencyBreakdown } from "@voice-agent/shared-types";
 import { useAudioCapture } from "./hooks/useAudioCapture.js";
@@ -15,9 +15,10 @@ import { MicButton } from "./components/VoiceAgent/MicButton.js";
 import { SkipLink } from "./components/a11y/SkipLink.js";
 import { LiveRegion } from "./components/VoiceAgent/LiveRegion.js";
 import { AdminPage } from "./pages/AdminPage.js";
-import { LatencyHUD } from "./components/VoiceAgent/LatencyHUD.js";
+import { LatencyHUD, type LatencyStage } from "./components/VoiceAgent/LatencyHUD.js";
 import type { AgentVisualState } from "./components/VoiceAgent/StatusRing.js";
 import type { ChatMessageModel } from "./types/chat.js";
+import { playFeedbackTone } from "./lib/feedback-tone.js";
 import "./styles/globals.css";
 
 const VAD_MIN_SPEECH_MS = 100;
@@ -32,6 +33,9 @@ export function App() {
   const [messages, setMessages] = useState<ChatMessageModel[]>([]);
   const [agentThinking, setAgentThinking] = useState(false);
   const [latency, setLatency] = useState<LatencyBreakdown | null>(null);
+  const [stage, setStage] = useState<LatencyStage | null>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [view, setView] = useState<"agent" | "admin">("agent");
   const ttsWaitStartedRef = useRef<number | null>(null);
@@ -39,6 +43,18 @@ export function App() {
 
   const appendLog = useCallback((line: string) => {
     setLog((prev) => [line, ...prev].slice(0, 20));
+  }, []);
+
+  const flashFeedback = useCallback((text: string) => {
+    setFeedback(text);
+    if (feedbackTimerRef.current !== null) clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => setFeedback(null), 2800);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current !== null) clearTimeout(feedbackTimerRef.current);
+    };
   }, []);
 
   const pushMessage = useCallback((msg: Omit<ChatMessageModel, "id" | "createdAt">) => {
@@ -58,10 +74,13 @@ export function App() {
         setInterim("");
         pushMessage({ role: "user", text });
         appendLog(`final (${latencyMs}ms)`);
+        setStage("llm");
+        setLatency({ stt: latencyMs, llm: 0, tts: 0, total: latencyMs });
         tts.prepare();
       },
       onAgentThinking: () => {
         setAgentThinking(true);
+        setStage("llm");
         appendLog("thinking…");
       },
       onAgentResponse: (msg) => {
@@ -72,6 +91,7 @@ export function App() {
           card: msg.reply.card,
           intent: msg.reply.intent,
         });
+        setStage("tts");
         setLatency({
           stt: msg.reply.latencyMs.stt,
           llm: msg.reply.latencyMs.llm,
@@ -86,6 +106,7 @@ export function App() {
         if (!ttsFirstByteRef.current && ttsWaitStartedRef.current !== null) {
           const firstByteMs = Math.round(performance.now() - ttsWaitStartedRef.current);
           ttsFirstByteRef.current = true;
+          setStage(null);
           setLatency((prev) => {
             if (!prev) return prev;
             return {
@@ -98,10 +119,15 @@ export function App() {
         }
         void tts.enqueue(audio, sequenceNum);
       },
-      onTtsDone: () => tts.markDone(),
+      onTtsDone: () => {
+        setStage(null);
+        tts.markDone();
+      },
       onError: (code, message) => {
         setAgentThinking(false);
+        setStage(null);
         appendLog(`err ${code}: ${message}`);
+        flashFeedback(`Error: ${message}`);
       },
       onMessage: (msg) => {
         const type = msg.type;
@@ -152,6 +178,16 @@ export function App() {
     },
   });
 
+  const captureFailed = capture.status === "error";
+
+  useEffect(() => {
+    if (capture.status !== "error") return;
+    setStage(null);
+    setAgentThinking(false);
+    playFeedbackTone("error");
+    appendLog("mic permission error");
+  }, [capture.status, appendLog]);
+
   const sendText = useCallback(
     (text: string) => {
       const trimmed = text.trim();
@@ -199,7 +235,7 @@ export function App() {
   };
 
   const waveformColor: Record<AgentVisualState, string> = {
-    idle: "#64748b",
+    idle: "#94a3b8",
     listening: "#22c55e",
     processing: "#f59e0b",
     speaking: "#a78bfa",
@@ -214,13 +250,21 @@ export function App() {
     waveform.reset();
     setInterim("");
     setAgentThinking(false);
+    setStage(null);
     appendLog("stopped");
+    flashFeedback("Disconnected — microphone off and session closed");
   };
 
   const handleManualBarge = () => {
     tts.cancel();
     proxy.sendMessage({ type: "barge_in" });
     appendLog("manual barge-in");
+    flashFeedback("Interrupted — agent stopped speaking");
+  };
+
+  const retryMicrophone = () => {
+    appendLog("mic retry");
+    void capture.start();
   };
 
   const micVariant: "idle" | "listening" | "speaking" | "interrupted" =
@@ -303,27 +347,56 @@ export function App() {
           waveformBufferRef={waveform.bufferRef}
           waveformColor={waveformColor[visualState]}
           statusLabel={statusLabel[visualState]}
+          statusActive={visualState === "processing"}
           sessionId={proxy.sessionId}
           footer="Darun Mustafa · darun.dev"
         >
-          <LatencyHUD latency={latency} />
+          {capture.status === "requesting_permission" && (
+            <div className="banner banner--info" role="status">
+              Requesting microphone access — allow the prompt to start talking.
+            </div>
+          )}
+
+          {captureFailed && capture.error && (
+            <div className="banner banner--error" role="alert">
+              <span>{capture.error}</span>
+              <button type="button" className="banner__action" onClick={retryMicrophone}>
+                Try again
+              </button>
+            </div>
+          )}
+
+          <LatencyHUD latency={latency} stage={stage} />
           <ChatLog messages={messages} interim={interim} />
 
           <QuickActions onAction={sendText} />
 
           <MicButton
             isCapturing={capture.isCapturing}
+            disabled={capture.status === "requesting_permission"}
             onStart={async () => {
               if (!proxy.isConnected) proxy.connect();
+              setStage("stt");
               await capture.start();
               appendLog("mic on");
             }}
             onStop={() => {
               capture.stop();
+              setStage(null);
               appendLog("mic off");
             }}
             variant={micVariant}
           />
+
+          {feedback && (
+            <div
+              className="banner banner--info"
+              role="status"
+              style={{ justifyContent: "center", textAlign: "center", marginBottom: "0.6rem" }}
+            >
+              {feedback}
+            </div>
+          )}
 
           <div
             style={{
@@ -338,10 +411,12 @@ export function App() {
               type="button"
               onClick={handleManualBarge}
               disabled={!tts.isPlaying}
+              title="Stop the agent mid-sentence"
+              aria-label="Interrupt agent speech"
               style={{
                 ...ghostBtn,
-                color: "var(--error)",
-                borderColor: "var(--error)",
+                color: "var(--ember)",
+                borderColor: "rgba(245, 158, 11, 0.55)",
               }}
             >
               Interrupt
@@ -350,6 +425,7 @@ export function App() {
               type="button"
               onClick={handleStop}
               disabled={!capture.isCapturing && !proxy.isConnected}
+              title="Turn off the microphone and close the session"
               style={ghostBtn}
             >
               Disconnect
