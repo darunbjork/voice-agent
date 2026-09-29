@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ChatMessageModel } from "../../types/chat.js";
 import { ChatMessage } from "./ChatMessage.js";
+import { prefersReducedMotion } from "../../lib/motion.js";
 
 export type ChatLogProps = {
   messages: ChatMessageModel[];
@@ -49,7 +50,7 @@ export function ChatLog({
   const hasContent = messages.length > 0 || Boolean(interim);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    bottomRef.current?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth" });
   }, [messages.length, interim]);
 
   return (
