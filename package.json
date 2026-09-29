@@ -2,6 +2,11 @@
   "name": "voice-agent",
   "private": true,
   "packageManager": "pnpm@9.15.0",
+  "pnpm": {
+    "overrides": {
+      "deepmerge-ts": "^8.0.2"
+    }
+  },
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",

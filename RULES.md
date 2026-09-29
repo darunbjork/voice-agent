@@ -123,7 +123,7 @@ Every PR must pass this mechanical checklist before merge. Not vibes. Not "looks
 - [ ] `npm run type-check` — zero TypeScript errors, no `any`
 - [ ] `npm run test` — all tests pass, coverage on critical paths unchanged or improved
 - [ ] `npm run build` — production build succeeds locally
-- [ ] `npm audit --production` — zero high/critical vulnerabilities
+- [ ] `pnpm audit --prod` — zero high/critical vulnerabilities (in npm-managed repos: `npm audit --omit=dev`)
 - [ ] **Referential integrity check** (see script below) — no malformed references, no broken references
 - [ ] **Accessibility check:** run Lighthouse or Axe on the primary page — no new violations
 - [ ] **Rollback path documented:** if this PR adds a feature flag or migration, the rollback is written in the PR body
