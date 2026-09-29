@@ -86,8 +86,6 @@ export function AdminPage({ onBack }: AdminPageProps) {
 
   const abortRef = useRef<AbortController | null>(null);
 
-  // A newer request supersedes an older one; unmount aborts whatever is
-  // still in flight (Rule 30).
   const nextController = useCallback((): AbortController => {
     abortRef.current?.abort();
     const controller = new AbortController();
