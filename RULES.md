@@ -131,30 +131,50 @@ Every PR must pass this mechanical checklist before merge. Not vibes. Not "looks
 
 **Referential integrity check — two-stage script:**
 
+The check runs only against rule prose. Fenced code blocks, inline code spans, and the revision history are excluded — they describe the reference format, they are not references. This scoping is what keeps the check from triggering on its own source or on prose that quotes the pattern.
+
 ```bash
+# Rule prose only: fenced code blocks and the revision history describe the
+# reference format, they are not references; inline code spans are stripped
+# for the same reason. NR keeps original file line numbers in diagnostics.
+prose=$(awk '
+  /^```/ { in_fence = !in_fence; next }
+  in_fence { next }
+  /^## Revision History/ { in_rev = 1; next }
+  in_rev { next }
+  { gsub(/`[^`]*`/, ""); print NR "\t" $0 }
+' RULES.md) || { echo "REFERENTIAL INTEGRITY: cannot read RULES.md"; exit 1; }
+
 # Stage 1 — every "see the ... rule" reference must match the required
 # bold format. Anything else fails loud instead of being silently skipped.
-if grep -nE 'see the .* rule' RULES.md \
-   | grep -vE 'see the \*\*[^*]+\*\* rule'; then
+if printf '%s\n' "$prose" \
+  | grep -E 'see the .* rule' \
+  | grep -vE 'see the \*\*[^*]+\*\* rule'; then
   echo "MALFORMED REFERENCE — reference does not match required format"
   exit 1
 fi
 
 # Stage 2 — every well-formed reference must resolve to an existing rule title.
-grep -oP 'see the \*\*[^*]+\*\* rule' RULES.md \
+broken=$(printf '%s\n' "$prose" \
+  | grep -oE 'see the \*\*[^*]+\*\* rule' \
   | sed -E 's/see the \*\*//; s/\*\* rule//' \
   | while read -r name; do
       grep -qE "^[0-9]+\. \*\*${name}" RULES.md || echo "BROKEN REF: $name"
-    done
+    done)
+if [ -n "$broken" ]; then
+  printf '%s\n' "$broken"
+  exit 1
+fi
 ```
 
-Zero output from Stage 2, and a non-zero exit only from Stage 1 on genuinely malformed input = pass.
+A non-zero exit = fail; zero output = pass. Stage 1 fails loud on a reference in prose that does not use the required bold format. Stage 2 fails loud on a well-formed reference that does not resolve to an existing rule title. Both stages read the same filtered prose, so neither can trigger on code, on the revision history, or on prose that quotes the pattern.
 
 **Scope of this gate, stated honestly:** this checklist enforces the subset of rules that are machine-checkable. Rules governing runtime behavior under load or in production — Auth Token Lifecycle (Rule 21), Rate Limiting (Rule 22), Transaction Boundaries (Rule 25), Idempotency (Rule 26), and Alerting Thresholds (Rule 42) — cannot be verified by this gate and require explicit manual sign-off per the checklist item above.
 
 **Known limitations of the referential integrity script (accepted, not fixed):**
-- Stage 1's greedy `.*` can misattribute *which* reference is malformed when two `see the ... rule` phrases appear on the same line. The check still fails loud and blocks merge correctly — only the diagnostic message is imprecise. Accepted because the failure is diagnostic-only, not an enforcement gap, and the edge case is rare.
+- Stage 1's greedy `.*` can misattribute *which* reference is malformed when two `see the ... rule` phrases appear on the same line, and a line mixing a well-formed with a malformed reference passes Stage 1 (the well-formed match satisfies the filter). The check still fails loud on any line that contains only malformed references — the edge case is diagnostic-only and requires a contrived line. Accepted because it is rare and low cost to recover from.
 - Rule-title matching in Stage 2 is prefix-based, not exact-title. A reference to `Server-Side Validation` would also match a hypothetical future rule titled `Server-Side Validation Timeouts`. Currently open and inert: no two rule titles in this document are prefixes of one another, so this cannot misfire against the file as it stands. It becomes live only if a future rule introduces a title that is a prefix of another existing title.
+- Only the exclusion of the revision history and of fenced code blocks is structural (awk state machine); inline-code exclusion is a line-level `gsub`, so a code span opened on one line and closed on another is not stripped. No such span exists in this document today.
 
 ---
 
