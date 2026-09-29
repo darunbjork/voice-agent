@@ -13,6 +13,7 @@ import {
   type SessionContextTurn,
 } from "../session/session.service.js";
 import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared-types";
+import { isTurnAborted } from "../../utils/turn-abort.js";
 
 const MAX_PCM_CHUNK_BYTES = 4096;
 
@@ -32,11 +33,20 @@ export async function audioRoutes(
     let dbSessionId: string = ephemeralId;
     let proxy: DeepgramProxy | null = null;
     let currentTts: TtsStream | null = null;
+    let turnAbort: AbortController | null = null;
+    const sessionAbort = new AbortController();
 
     const sendSafe = (msg: ServerAudioMessage): void => send(socket, msg);
 
-    const runAgentTurn = async (
+    const abortActiveTurn = (reason: string): void => {
+      if (!turnAbort || turnAbort.signal.aborted) return;
+      turnAbort.abort(reason);
+      log.info({ reason }, "Agent turn aborted");
+    };
+
+    const runTurn = async (
       msg: Extract<ServerAudioMessage, { type: "transcript_final" }>,
+      signal: AbortSignal,
     ): Promise<void> => {
       sendSafe({ type: "agent_thinking" });
 
@@ -54,6 +64,8 @@ export async function audioRoutes(
         log.warn({ err }, "Could not load session context");
       }
 
+      if (signal.aborted) return;
+
       let reply;
       let pipelineMs = 0;
       try {
@@ -64,12 +76,17 @@ export async function audioRoutes(
             turnIndex,
             sttLatencyMs: msg.latencyMs,
             context,
+            signal,
           },
           log,
         );
         reply = result.reply;
         pipelineMs = result.pipelineMs;
       } catch (err) {
+        if (isTurnAborted(err, signal)) {
+          log.info("Agent pipeline aborted — suppressing reply");
+          return;
+        }
         log.error({ err }, "Agent pipeline failed");
         sendSafe({
           type: "error",
@@ -78,6 +95,8 @@ export async function audioRoutes(
         });
         return;
       }
+
+      if (signal.aborted) return;
 
       log.info({ pipelineMs, intent: reply.intent, turnIndex }, "WS agent pipeline done");
 
@@ -100,8 +119,23 @@ export async function audioRoutes(
       }
     };
 
+    const runAgentTurn = async (
+      msg: Extract<ServerAudioMessage, { type: "transcript_final" }>,
+    ): Promise<void> => {
+      const controller = new AbortController();
+      turnAbort = controller;
+      try {
+        await runTurn(msg, controller.signal);
+      } catch (err) {
+        if (!isTurnAborted(err, controller.signal)) throw err;
+      } finally {
+        if (turnAbort === controller) turnAbort = null;
+      }
+    };
+
     const onFinalTranscript = (msg: ServerAudioMessage): void => {
       if (msg.type !== "transcript_final") return;
+      abortActiveTurn("superseded_by_new_utterance");
       void runAgentTurn(msg);
     };
 
@@ -125,6 +159,7 @@ export async function audioRoutes(
           },
           log,
           dbSessionId,
+          sessionAbort.signal,
         );
       } catch (err) {
         log.error({ err }, "Failed to send session_id or create proxy");
@@ -166,6 +201,7 @@ export async function audioRoutes(
         const msg = JSON.parse(raw.toString()) as ClientAudioMessage;
 
         if (msg.type === "barge_in") {
+          abortActiveTurn("barge_in");
           currentTts?.cancel();
           currentTts = null;
         }
@@ -196,9 +232,10 @@ export async function audioRoutes(
 
     socket.on("close", () => {
       log.info("Audio WebSocket closed by client");
+      abortActiveTurn("socket_closed");
       currentTts?.cancel();
       currentTts = null;
-      proxy?.close();
+      sessionAbort.abort("socket_closed");
 
       void setupDone
         .then(() => endSession(request.server.prisma, dbSessionId))
@@ -209,9 +246,10 @@ export async function audioRoutes(
 
     socket.on("error", (err) => {
       log.error({ err }, "Audio WebSocket error");
+      abortActiveTurn("socket_error");
       currentTts?.cancel();
       currentTts = null;
-      proxy?.close();
+      sessionAbort.abort("socket_error");
     });
   });
 }
