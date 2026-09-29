@@ -116,7 +116,7 @@ export function useAudioCapture(
       const source = ctx.createMediaStreamSource(stream);
       sourceRef.current = source;
 
-      const bufferSize = 2048;
+      const bufferSize = 512;
       const processor = ctx.createScriptProcessor(bufferSize, 1, 1);
       processorRef.current = processor;
 

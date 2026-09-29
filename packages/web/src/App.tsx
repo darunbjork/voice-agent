@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import type { LatencyBreakdown } from "@voice-agent/shared-types";
 import { useAudioCapture } from "./hooks/useAudioCapture.js";
 import { useDeepgramProxy } from "./hooks/useDeepgramProxy.js";
@@ -373,11 +372,8 @@ export function App() {
         <button
           type="button"
           onClick={() => setView("admin")}
-          style={{
-            ...ghostBtn,
-            fontSize: 12,
-            padding: "0.35rem 0.75rem",
-          }}
+          className="btn-ghost"
+          style={{ fontSize: 12, padding: "0.35rem 0.75rem" }}
         >
           Admin
         </button>
@@ -460,8 +456,8 @@ export function App() {
               disabled={!tts.isPlaying || bargeIn.status === "cooldown"}
               title="Stop the agent mid-sentence"
               aria-label="Interrupt agent speech"
+              className="btn-ghost"
               style={{
-                ...ghostBtn,
                 color: "var(--ember)",
                 borderColor: "rgba(245, 158, 11, 0.55)",
               }}
@@ -473,7 +469,7 @@ export function App() {
               onClick={handleStop}
               disabled={!capture.isCapturing && !proxy.isConnected}
               title="Turn off the microphone and close the session"
-              style={ghostBtn}
+              className="btn-ghost"
             >
               Disconnect
             </button>
@@ -501,14 +497,3 @@ export function App() {
     </div>
   );
 }
-
-const ghostBtn: CSSProperties = {
-  background: "transparent",
-  color: "var(--text)",
-  border: "1px solid var(--border-hover)",
-  borderRadius: "var(--radius-sm)",
-  padding: "0.55rem 1.15rem",
-  fontWeight: 500,
-  fontSize: 13,
-  cursor: "pointer",
-};
