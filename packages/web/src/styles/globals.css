@@ -220,6 +220,38 @@ input {
   max-width: 26ch;
 }
 
+/* --- Microphone capture chip (FSM-derived micOn) --- */
+.mic-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.mic-chip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+
+.mic-chip--on {
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.mic-chip--on .mic-chip__dot {
+  background: var(--success);
+}
+
 /* --- Inline status banners (mic permission, action feedback) --- */
 .banner {
   display: flex;

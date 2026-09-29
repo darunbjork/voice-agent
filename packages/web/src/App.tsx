@@ -18,6 +18,7 @@ import { AdminPage } from "./pages/AdminPage.js";
 import { LatencyHUD, type LatencyStage } from "./components/VoiceAgent/LatencyHUD.js";
 import type { AgentState } from "./state/agent-state.js";
 import { agentReducer, initialAgentSnapshot } from "./state/agent-state.js";
+import { composeLiveMessage } from "./state/live-message.js";
 import type { ChatMessageModel } from "./types/chat.js";
 import { playFeedbackTone } from "./lib/feedback-tone.js";
 import "./styles/globals.css";
@@ -44,15 +45,6 @@ const waveformColor: Record<AgentState, string> = {
   speaking: "#a78bfa",
   error: "#ef4444",
   disconnected: "#64748b",
-};
-
-const liveMessage: Record<AgentState, string> = {
-  idle: "Agent idle",
-  listening: "Listening",
-  processing: "Processing",
-  speaking: "Agent speaking",
-  error: "Something went wrong",
-  disconnected: "Disconnected",
 };
 
 export function App() {
@@ -328,7 +320,7 @@ export function App() {
       }}
     >
       <SkipLink />
-      <LiveRegion message={liveMessage[visualState]} />
+      <LiveRegion message={composeLiveMessage(visualState, agent.micOn)} />
 
       <header style={{ textAlign: "center", maxWidth: 480 }}>
         <h1
@@ -361,6 +353,7 @@ export function App() {
       <main id="main-content">
         <VoiceAgentLayout
           visualState={visualState}
+          micOn={agent.micOn}
           waveformBufferRef={waveform.bufferRef}
           waveformColor={waveformColor[visualState]}
           statusLabel={statusLabel[visualState]}
