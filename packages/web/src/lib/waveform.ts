@@ -7,8 +7,10 @@ export function computeBarHeights(
   height: number,
   reduced: boolean,
 ): number[] {
-  if (reduced) {
-    return new Array<number>(barCount).fill(Math.min(height, STATIC_BAR_HEIGHT));
+  const staticHeight = Math.min(height, STATIC_BAR_HEIGHT);
+
+  if (reduced || samples.length === 0) {
+    return new Array<number>(barCount).fill(staticHeight);
   }
 
   const heights: number[] = [];

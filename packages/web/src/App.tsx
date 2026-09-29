@@ -81,12 +81,17 @@ export function App() {
     setMessages((prev) => [...prev, { ...msg, id: newId(), createdAt: new Date().toISOString() }]);
   }, []);
 
+  const waveform = useWaveform(64);
+
   const tts = useTTSPlayer({
     onDone: () => {
       appendLog("TTS done");
       dispatchAgent({ type: "TTS_DONE" });
     },
     onCancel: () => appendLog("TTS cancelled"),
+    onLevel: (rms) => {
+      if (agent.state === "speaking") waveform.feed(rms);
+    },
   });
 
   const proxy = useDeepgramProxy({
@@ -175,8 +180,6 @@ export function App() {
     },
   });
 
-  const waveform = useWaveform(64);
-
   const vad = useVAD({
     threshold: 0.02,
     minSpeechMs: VAD_MIN_SPEECH_MS,
@@ -203,7 +206,7 @@ export function App() {
     onChunk: (chunk) => proxy.sendAudio(chunk),
     onRms: (rms) => {
       vad.feed(rms);
-      waveform.feed(rms);
+      if (agent.state !== "speaking") waveform.feed(rms);
     },
   });
 
@@ -216,6 +219,7 @@ export function App() {
     }
     if (capture.status === "idle") {
       dispatchAgent({ type: "MIC_OFF" });
+      waveform.reset();
     }
   }, [capture.status]);
 

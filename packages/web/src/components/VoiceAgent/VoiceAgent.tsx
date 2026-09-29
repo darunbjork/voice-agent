@@ -3,6 +3,7 @@ import { GlassCard } from "./GlassCard.js";
 import { StatusRing } from "./StatusRing.js";
 import type { AgentState } from "../../state/agent-state.js";
 import { WaveformCanvas } from "./WaveformCanvas.js";
+import { visualizerCaption } from "../../lib/visualizer.js";
 
 export type VoiceAgentLayoutProps = {
   visualState: AgentState;
@@ -109,7 +110,9 @@ export function VoiceAgentLayout({
             padding: "0.85rem 1rem",
             marginBottom: "1.25rem",
             display: "flex",
-            justifyContent: "center",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 8,
           }}
         >
           <WaveformCanvas
@@ -119,6 +122,16 @@ export function VoiceAgentLayout({
             height={56}
             barCount={64}
           />
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              color: "var(--muted)",
+              letterSpacing: "0.04em",
+            }}
+          >
+            {visualizerCaption(visualState)}
+          </span>
         </div>
 
         {children}
