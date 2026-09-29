@@ -10,6 +10,7 @@ import { safeGenerateAgentOutput } from "./gemini.service.js";
 import { runTool } from "./tool.registry.js";
 import { incrementUsage } from "../../utils/usage-tracker.js";
 import type { SessionContextTurn } from "../session/session.service.js";
+import { assertNotAborted } from "../../utils/turn-abort.js";
 
 export type HandleUtteranceInput = {
   text: string;
@@ -17,6 +18,7 @@ export type HandleUtteranceInput = {
   turnIndex: number;
   sttLatencyMs: number;
   context?: SessionContextTurn[];
+  signal?: AbortSignal;
 };
 
 export type HandleUtteranceResult = {
@@ -32,6 +34,8 @@ export async function handleUtterance(
   log: FastifyBaseLogger,
 ): Promise<HandleUtteranceResult> {
   const pipelineStart = Date.now();
+
+  assertNotAborted(input.signal, "Agent turn aborted before start");
 
   // !x Security checklist: hard cap transcript length before it reaches the LLM.
   const trimmed = input.text.trim().slice(0, MAX_INPUT_CHARS);
@@ -76,7 +80,7 @@ export async function handleUtterance(
       promptText = `${lines.join("\n")}\nUser: ${trimmed}`;
     }
 
-    output = await safeGenerateAgentOutput(promptText, log, undefined);
+    output = await safeGenerateAgentOutput(promptText, log, undefined, input.signal);
     intent = output.intent;
 
     log.info(
@@ -84,6 +88,8 @@ export async function handleUtterance(
       "Agent reply (slow path / Gemini)",
     );
   }
+
+  assertNotAborted(input.signal, "Agent turn aborted before reply was sent");
 
   const llmLatencyMs = Math.max(1, Date.now() - pipelineStart);
 

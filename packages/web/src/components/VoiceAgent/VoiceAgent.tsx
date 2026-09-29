@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
 import { GlassCard } from "./GlassCard.js";
-import { StatusRing, type AgentVisualState } from "./StatusRing.js";
+import { StatusRing } from "./StatusRing.js";
+import type { AgentState } from "../../state/agent-state.js";
 import { WaveformCanvas } from "./WaveformCanvas.js";
 
 export type VoiceAgentLayoutProps = {
-  visualState: AgentVisualState;
+  visualState: AgentState;
   waveformBufferRef: React.RefObject<number[]>;
   waveformColor: string;
   statusLabel: string;

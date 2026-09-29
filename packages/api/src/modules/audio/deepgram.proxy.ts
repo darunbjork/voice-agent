@@ -25,6 +25,25 @@ export function createDeepgramProxy(
   onTranscript: TranscriptHandler,
   log: FastifyBaseLogger,
   sessionId: string,
+  signal?: AbortSignal,
+): DeepgramProxy {
+  return withAbortSignal(buildDeepgramProxy(onTranscript, log, sessionId), signal);
+}
+
+function withAbortSignal(proxy: DeepgramProxy, signal?: AbortSignal): DeepgramProxy {
+  if (!signal) return proxy;
+  if (signal.aborted) {
+    proxy.close();
+    return proxy;
+  }
+  signal.addEventListener("abort", () => proxy.close(), { once: true });
+  return proxy;
+}
+
+function buildDeepgramProxy(
+  onTranscript: TranscriptHandler,
+  log: FastifyBaseLogger,
+  sessionId: string,
 ): DeepgramProxy {
   if (env.VOICE_MOCK) {
     return createMockProxy(onTranscript, log, sessionId);
@@ -178,6 +197,15 @@ function createLiveProxy(
     closed = true;
   });
 
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    if (dg.readyState === WebSocket.OPEN) {
+      dg.send(JSON.stringify({ type: "CloseStream" }));
+      dg.close();
+    }
+  };
+
   return {
     get ready() {
       return !closed && dg.readyState === WebSocket.OPEN;
@@ -188,14 +216,7 @@ function createLiveProxy(
       dg.send(Buffer.from(chunk));
     },
 
-    close(): void {
-      if (closed) return;
-      closed = true;
-      if (dg.readyState === WebSocket.OPEN) {
-        dg.send(JSON.stringify({ type: "CloseStream" }));
-        dg.close();
-      }
-    },
+    close,
   };
 }
 

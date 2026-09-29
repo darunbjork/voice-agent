@@ -15,6 +15,7 @@ import {
   CircuitOpenError,
 } from "../../utils/circuit-breaker.js";
 import { GeminiAgentOutputSchema, type GeminiAgentOutputParsed } from "./gemini.schema.js";
+import { AgentTurnAbortedError, isTurnAborted } from "../../utils/turn-abort.js";
 
 const MODEL_ID = "gemini-1.5-flash";
 
@@ -45,6 +46,7 @@ export async function generateAgentOutput(
   userText: string,
   log: FastifyBaseLogger,
   preferredIntent?: IntentType,
+  signal?: AbortSignal,
 ): Promise<GeminiAgentOutput> {
   const estimated = estimateTokens(userText) + estimateTokens(SYSTEM_PROMPT) + 120;
   assertWithinBudget("agent_response", estimated);
@@ -57,6 +59,10 @@ export async function generateAgentOutput(
 
   if (!env.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY is required when VOICE_MOCK=false");
+  }
+
+  if (signal?.aborted) {
+    throw new AgentTurnAbortedError("Gemini request aborted before start");
   }
 
   assertCircuitClosed("gemini");
@@ -74,13 +80,21 @@ export async function generateAgentOutput(
         systemInstruction: SYSTEM_PROMPT,
         temperature: 0.3,
         responseMimeType: "application/json",
+        abortSignal: signal,
       },
     });
     rawText = response.text ?? "";
   } catch (err) {
+    if (signal?.aborted) {
+      throw new AgentTurnAbortedError("Gemini request aborted");
+    }
     // Network / API failure — counts toward the breaker.
     recordFailure("gemini");
     throw err;
+  }
+
+  if (signal?.aborted) {
+    throw new AgentTurnAbortedError("Gemini request aborted after response");
   }
 
   if (!rawText) {
@@ -126,10 +140,12 @@ export async function safeGenerateAgentOutput(
   userText: string,
   log: FastifyBaseLogger,
   preferredIntent?: IntentType,
+  signal?: AbortSignal,
 ): Promise<GeminiAgentOutput> {
   try {
-    return await generateAgentOutput(userText, log, preferredIntent);
+    return await generateAgentOutput(userText, log, preferredIntent, signal);
   } catch (err) {
+    if (isTurnAborted(err, signal)) throw err;
     if (err instanceof CircuitOpenError) {
       log.warn({ provider: err.provider }, "Circuit open — skipping Gemini");
       return {
