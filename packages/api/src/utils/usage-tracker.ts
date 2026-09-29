@@ -47,7 +47,9 @@ export async function getDailyUsage(): Promise<UsageSnapshot> {
           sttSeconds: Number(raw.sttSeconds ?? 0),
         };
       }
-    } catch {}
+    } catch {
+      // Redis read failed — fall through to the in-memory snapshot
+    }
   }
 
   return memoryStore.get(date) ?? emptySnapshot(date);
@@ -73,7 +75,9 @@ export async function incrementUsage(delta: {
       const updated = await getDailyUsage();
       await maybeAlert(updated);
       return updated;
-    } catch {}
+    } catch {
+      // Redis write failed — fall through to the in-memory store
+    }
   }
 
   const current = memoryStore.get(date) ?? emptySnapshot(date);

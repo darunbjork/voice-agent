@@ -106,7 +106,9 @@ export function MicButton({
         if (e.currentTarget.hasPointerCapture(e.pointerId)) {
           e.currentTarget.releasePointerCapture(e.pointerId);
         }
-      } catch {}
+      } catch {
+        // the pointer may already have been released; nothing to clean up
+      }
 
       if (holdFiredRef.current) {
         holdFiredRef.current = false;
@@ -133,7 +135,9 @@ export function MicButton({
         if (e.currentTarget.hasPointerCapture(e.pointerId)) {
           e.currentTarget.releasePointerCapture(e.pointerId);
         }
-      } catch {}
+      } catch {
+        // the pointer may already have been released; nothing to clean up
+      }
     },
     [clearHoldTimer, stopCapture],
   );

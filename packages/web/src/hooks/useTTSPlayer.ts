@@ -107,7 +107,9 @@ export function useTTSPlayer(options: UseTTSPlayerOptions = {}) {
       try {
         source.stop();
         source.disconnect();
-      } catch {}
+      } catch {
+        // an already-stopped source throws; nothing to clean up
+      }
     }
     activeSourcesRef.current = [];
     nextStartTimeRef.current = 0;
@@ -131,7 +133,9 @@ export function useTTSPlayer(options: UseTTSPlayerOptions = {}) {
         try {
           source.stop();
           source.disconnect();
-        } catch {}
+        } catch {
+          // an already-stopped source throws; nothing to clean up
+        }
       }
       activeSourcesRef.current = [];
       if (ctxRef.current && ctxRef.current.state !== "closed") {

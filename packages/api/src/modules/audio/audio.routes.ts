@@ -67,7 +67,7 @@ export async function audioRoutes(
       if (signal.aborted) return;
 
       let reply;
-      let pipelineMs = 0;
+      let pipelineMs: number;
       try {
         const result = await handleUtterance(
           {
@@ -170,7 +170,9 @@ export async function audioRoutes(
         });
         try {
           socket.close();
-        } catch {}
+        } catch {
+          // the socket may already be closed; nothing to clean up
+        }
       }
     })().catch((err: unknown) => {
       log.error({ err }, "Audio session setup failed");

@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "lint": "echo \"no lint yet\" && exit 0",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "clean": "rm -rf dist"

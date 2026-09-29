@@ -74,7 +74,7 @@ export async function healthRoutes(
       },
     },
     async (request): Promise<HealthResponse> => {
-      let db: HealthResponse["db"] = "not_configured";
+      let db: HealthResponse["db"];
       let redis: HealthResponse["redis"] = "not_configured";
 
       try {
