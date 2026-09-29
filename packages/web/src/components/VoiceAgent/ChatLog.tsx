@@ -8,6 +8,7 @@ export type ChatLogProps = {
   interim?: string;
   emptyTitle?: string;
   emptyHint?: string;
+  revealedWords?: number;
 };
 
 const EMPTY_HEIGHT = 92;
@@ -45,9 +46,11 @@ export function ChatLog({
   interim,
   emptyTitle = "Tap the microphone to start a conversation",
   emptyHint = "Or pick a prompt below — try Weather, Reminder, or Help.",
+  revealedWords,
 }: ChatLogProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const hasContent = messages.length > 0 || Boolean(interim);
+  const lastAgentIndex = messages.reduce((last, m, i) => (m.role === "agent" ? i : last), -1);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth" });
@@ -73,8 +76,16 @@ export function ChatLog({
         </div>
       )}
 
-      {messages.map((m) => (
-        <ChatMessage key={m.id} message={m} />
+      {messages.map((m, index) => (
+        <ChatMessage
+          key={m.id}
+          message={m}
+          revealedWords={
+            revealedWords !== undefined && m.role === "agent" && index === lastAgentIndex
+              ? revealedWords
+              : undefined
+          }
+        />
       ))}
 
       {interim && (

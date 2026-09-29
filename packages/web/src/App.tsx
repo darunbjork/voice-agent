@@ -19,8 +19,10 @@ import { LatencyHUD, type LatencyStage } from "./components/VoiceAgent/LatencyHU
 import type { AgentState } from "./state/agent-state.js";
 import { agentReducer, initialAgentSnapshot } from "./state/agent-state.js";
 import { composeLiveMessage } from "./state/live-message.js";
+import { initialRevealState, revealReducer } from "./state/response-reveal.js";
 import type { ChatMessageModel } from "./types/chat.js";
 import { playFeedbackTone } from "./lib/feedback-tone.js";
+import { prefersReducedMotion } from "./lib/motion.js";
 import "./styles/globals.css";
 
 const VAD_MIN_SPEECH_MS = 100;
@@ -81,14 +83,20 @@ export function App() {
     setMessages((prev) => [...prev, { ...msg, id: newId(), createdAt: new Date().toISOString() }]);
   }, []);
 
+  const [reveal, dispatchReveal] = useReducer(revealReducer, initialRevealState);
+
   const waveform = useWaveform(64);
 
   const tts = useTTSPlayer({
     onDone: () => {
       appendLog("TTS done");
       dispatchAgent({ type: "TTS_DONE" });
+      dispatchReveal({ type: "COMPLETE" });
     },
-    onCancel: () => appendLog("TTS cancelled"),
+    onCancel: () => {
+      appendLog("TTS cancelled");
+      dispatchReveal({ type: "COMPLETE" });
+    },
     onLevel: (rms) => {
       if (agent.state === "speaking") waveform.feed(rms);
     },
@@ -132,6 +140,13 @@ export function App() {
         });
         ttsWaitStartedRef.current = performance.now();
         ttsFirstByteRef.current = false;
+        if (typeof tts.getProgress === "function") {
+          dispatchReveal({
+            type: "START",
+            text: msg.reply.text,
+            reduced: prefersReducedMotion(),
+          });
+        }
         appendLog(`intent=${msg.reply.intent}`);
       },
       onTtsChunk: (audio, sequenceNum) => {
@@ -158,6 +173,7 @@ export function App() {
       },
       onError: (code, message) => {
         dispatchAgent({ type: "FAILED" });
+        dispatchReveal({ type: "COMPLETE" });
         setStage(null);
         appendLog(`err ${code}: ${message}`);
         flashFeedback(`Error: ${message}`);
@@ -222,6 +238,19 @@ export function App() {
       waveform.reset();
     }
   }, [capture.status]);
+
+  useEffect(() => {
+    if (reveal.status !== "revealing") return;
+    if (typeof tts.getProgress !== "function") {
+      dispatchReveal({ type: "COMPLETE" });
+      return;
+    }
+    let frame = requestAnimationFrame(function tick() {
+      dispatchReveal({ type: "PROGRESS", progress: tts.getProgress() });
+      frame = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [reveal.status, tts.getProgress]);
 
   useEffect(() => {
     if (capture.status !== "error") return;
@@ -381,7 +410,11 @@ export function App() {
           )}
 
           <LatencyHUD latency={latency} stage={stage} />
-          <ChatLog messages={messages} interim={interim} />
+          <ChatLog
+            messages={messages}
+            interim={interim}
+            revealedWords={reveal.status === "revealing" ? reveal.revealedWords : undefined}
+          />
 
           <QuickActions onAction={sendText} />
 
