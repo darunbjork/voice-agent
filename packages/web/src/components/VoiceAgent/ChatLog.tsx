@@ -5,15 +5,48 @@ import { ChatMessage } from "./ChatMessage.js";
 export type ChatLogProps = {
   messages: ChatMessageModel[];
   interim?: string;
-  emptyLabel?: string;
+  emptyTitle?: string;
+  emptyHint?: string;
 };
+
+const EMPTY_HEIGHT = 92;
+const ACTIVE_HEIGHT = 120;
+const MAX_HEIGHT = 280;
+
+function MicGlyph() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+      style={{ color: "var(--iris-soft)", opacity: 0.9 }}
+    >
+      <path
+        d="M12 1.75a3.25 3.25 0 0 0-3.25 3.25v6a3.25 3.25 0 1 0 6.5 0v-6A3.25 3.25 0 0 0 12 1.75Z"
+        fill="currentColor"
+      />
+      <path
+        d="M7 11a5 5 0 0 0 10 0"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+      <path d="M12 16v3.25" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <path d="M9 19.25h6" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 export function ChatLog({
   messages,
   interim,
-  emptyLabel = "Conversation will appear here",
+  emptyTitle = "Tap the microphone to start a conversation",
+  emptyHint = "Or pick a prompt below — try Weather, Reminder, or Help.",
 }: ChatLogProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const hasContent = messages.length > 0 || Boolean(interim);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -21,27 +54,21 @@ export function ChatLog({
 
   return (
     <div
+      className="chat-log"
+      role="log"
+      aria-live="polite"
+      aria-relevant="additions text"
+      aria-label="Conversation"
       style={{
-        background: "var(--surface-2)",
-        borderRadius: "var(--radius-md)",
-        border: "1px solid var(--border)",
-        padding: "0.75rem",
-        marginBottom: "1rem",
-        maxHeight: 280,
-        overflowY: "auto",
-        minHeight: 120,
+        maxHeight: MAX_HEIGHT,
+        minHeight: hasContent ? ACTIVE_HEIGHT : EMPTY_HEIGHT,
       }}
     >
-      {messages.length === 0 && !interim && (
-        <div
-          style={{
-            color: "var(--muted)",
-            fontSize: 13,
-            textAlign: "center",
-            padding: "1.5rem 0.5rem",
-          }}
-        >
-          {emptyLabel}
+      {!hasContent && (
+        <div className="empty-state">
+          <MicGlyph />
+          <p className="empty-state__title">{emptyTitle}</p>
+          <p className="empty-state__hint">{emptyHint}</p>
         </div>
       )}
 

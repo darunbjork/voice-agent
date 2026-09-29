@@ -8,8 +8,8 @@ Production-style voice agent: real-time streaming STT, structured LLM reasoning,
 
 ## Live demo
 
-- **Web** — `<web URL after Vercel deploy>` (target: `https://voice-agent.darun.dev`)
-- **API health** — `<fly URL>/health` (target: `https://voice-agent-api.fly.dev/health`)
+- **Web** — https://voice-agent-nine-self.vercel.app (target: `https://voice-agent.darun.dev`)
+- **API health** — https://darun-voice-agent-api.fly.dev/health
 - **Portfolio** — [darun-dev.pages.dev](https://darun-dev.pages.dev)
 
 ## Architecture

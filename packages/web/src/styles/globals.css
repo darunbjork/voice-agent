@@ -48,15 +48,20 @@ input {
   border: 0;
 }
 
-/* Focus visibility */
-:focus-visible {
+/* Focus visibility — :focus fallback for AT/browsers without :focus-visible */
+:focus {
   outline: 2px solid var(--iris-soft);
   outline-offset: 2px;
 }
 
-button:focus:not(:focus-visible),
-input:focus:not(:focus-visible) {
-  outline: none;
+:focus:not(:focus-visible) {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--iris-soft);
+  outline-offset: 2px;
 }
 
 /* Skip link */
@@ -76,6 +81,192 @@ input:focus:not(:focus-visible) {
 
 .skip-link:focus {
   top: 8px;
+}
+
+/* --- Mic button: listening pulse (visual heartbeat on activation) --- */
+.mic-button {
+  position: relative;
+}
+
+.mic-button.is-active::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  opacity: 0.55;
+  animation: mic-pulse 1.5s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+  pointer-events: none;
+}
+
+@keyframes mic-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  70% {
+    transform: scale(1.32);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.32);
+    opacity: 0;
+  }
+}
+
+/* --- Status label heartbeat while the agent works --- */
+.status-value.is-active {
+  animation: status-heartbeat 1.6s ease-in-out infinite;
+}
+
+@keyframes status-heartbeat {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* --- Latency: in-flight step indicator --- */
+.stage-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  justify-content: center;
+}
+
+.stage-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: stage-dot 1s ease-in-out infinite;
+}
+
+.stage-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.stage-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes stage-dot {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* --- Prompt chips: clickable affordance --- */
+.prompt-chip {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-hover);
+  border-radius: 999px;
+  padding: 0.4rem 0.85rem;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    transform 120ms ease;
+}
+
+.prompt-chip:hover:not(:disabled) {
+  border-color: var(--iris);
+  background: rgba(124, 58, 237, 0.14);
+}
+
+.prompt-chip:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.prompt-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* --- Empty state: actionable first-run guidance --- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  padding: 1.1rem 0.75rem;
+  color: var(--muted);
+}
+
+.empty-state__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.empty-state__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 26ch;
+}
+
+/* --- Inline status banners (mic permission, action feedback) --- */
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  font-size: 12px;
+  line-height: 1.45;
+  margin-bottom: 0.85rem;
+  text-align: left;
+}
+
+.banner--error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+
+.banner--info {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fcd34d;
+}
+
+.banner__action {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0.3rem 0.65rem;
+  cursor: pointer;
+}
+
+/* --- Conversation log scroll region --- */
+.chat-log {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  overflow-y: auto;
+  transition: min-height 220ms ease;
 }
 
 @media (prefers-reduced-motion: reduce) {

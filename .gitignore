@@ -6,9 +6,9 @@ dist
 *.log
 coverage
 .DS_Store
-json-schema-untrusted.md
-docs/day-*.md
-docs/ruleset-setup.md
 packages/api/src/generated/prisma/
 packages/api/.env
-AGENTS.md
+
+# Markdown stays local — never committed, never rendered on GitHub
+*.md
+!/README.md

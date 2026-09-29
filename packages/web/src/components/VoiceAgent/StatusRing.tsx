@@ -9,12 +9,17 @@ export type StatusRingProps = {
 };
 
 const STATE_COLORS: Record<AgentVisualState, string> = {
-  idle: "#64748b",
+  idle: "#94a3b8",
   listening: "#22c55e",
   processing: "#f59e0b",
   speaking: "#a78bfa",
   interrupted: "#ef4444",
 };
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
 
 export function StatusRing({ state, size = 72 }: StatusRingProps) {
   const ringRef = useRef<SVGCircleElement>(null);
@@ -29,7 +34,6 @@ export function StatusRing({ state, size = 72 }: StatusRingProps) {
 
     const color = STATE_COLORS[state];
 
-    // Always reset to canonical base state.
     gsap.set(ring, {
       stroke: color,
       strokeDasharray: "none",
@@ -101,6 +105,16 @@ export function StatusRing({ state, size = 72 }: StatusRingProps) {
 
       case "idle":
       default:
+        // Ready-state breathing glow so the ring reads as "on", not dead.
+        if (!prefersReducedMotion()) {
+          gsap.to(glow, {
+            opacity: 0.42,
+            duration: 2.4,
+            yoyo: true,
+            repeat: -1,
+            ease: "sine.inOut",
+          });
+        }
         break;
     }
 

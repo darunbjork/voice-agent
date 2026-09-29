@@ -8,6 +8,7 @@ export type VoiceAgentLayoutProps = {
   waveformBufferRef: React.RefObject<number[]>;
   waveformColor: string;
   statusLabel: string;
+  statusActive?: boolean;
   sessionId: string | null;
   children?: ReactNode;
   footer?: ReactNode;
@@ -18,6 +19,7 @@ export function VoiceAgentLayout({
   waveformBufferRef,
   waveformColor,
   statusLabel,
+  statusActive = false,
   sessionId,
   children,
   footer,
@@ -57,6 +59,7 @@ export function VoiceAgentLayout({
                 Status
               </div>
               <div
+                className={statusActive ? "status-value is-active" : "status-value"}
                 style={{
                   fontFamily: "var(--font-display)",
                   fontSize: 20,

@@ -47,7 +47,6 @@ export function TextInput({
           background: "var(--surface-2)",
           color: "var(--text)",
           fontSize: 14,
-          outline: "none",
           opacity: disabled ? 0.6 : 1,
         }}
         onFocus={(e) => {

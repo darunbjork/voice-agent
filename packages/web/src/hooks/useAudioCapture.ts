@@ -23,13 +23,27 @@ export type AudioCaptureControls = {
 
 export type UseAudioCaptureOptions = {
   onChunk: (chunk: ArrayBuffer) => void;
-  /**
-   * Called with the current RMS (0..1) on every audio frame.
-   * Bypasses React state so VAD and meters can consume audio-rate
-   * samples without triggering a re-render per frame.
-   */
   onRms?: (rms: number) => void;
 };
+
+function describeCaptureError(err: unknown): string {
+  const name = err instanceof DOMException ? err.name : "";
+  switch (name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return "Microphone access was blocked. Allow microphone permission for this site, then try again.";
+    case "NotFoundError":
+    case "DevicesNotFoundError":
+      return "No microphone was found. Connect a microphone, then try again.";
+    case "NotReadableError":
+    case "TrackStartError":
+      return "Your microphone is in use by another app. Close it, then try again.";
+    default:
+      return err instanceof Error && err.message
+        ? `Microphone unavailable: ${err.message}`
+        : "Microphone unavailable. Check your input device, then try again.";
+  }
+}
 
 export function useAudioCapture(
   options: UseAudioCaptureOptions,
@@ -49,7 +63,7 @@ export function useAudioCapture(
   const onChunkRef = useRef(onChunk);
   onChunkRef.current = onChunk;
 
-  const stop = useCallback(() => {
+  const teardown = useCallback(() => {
     processorRef.current?.disconnect();
     sourceRef.current?.disconnect();
     processorRef.current = null;
@@ -66,10 +80,13 @@ export function useAudioCapture(
       void audioContextRef.current.close();
     }
     audioContextRef.current = null;
-
-    setStatus("idle");
     setLevel(0);
   }, []);
+
+  const stop = useCallback(() => {
+    teardown();
+    setStatus("idle");
+  }, [teardown]);
 
   const start = useCallback(async () => {
     if (status === "capturing" || status === "requesting_permission") return;
@@ -145,12 +162,11 @@ export function useAudioCapture(
 
       setStatus("capturing");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Microphone permission denied";
-      setError(message);
+      teardown();
+      setError(describeCaptureError(err));
       setStatus("error");
-      stop();
     }
-  }, [status, stop]);
+  }, [status, teardown]);
 
   useEffect(() => {
     return () => {

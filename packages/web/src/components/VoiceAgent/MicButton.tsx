@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
+import { playFeedbackTone } from "../../lib/feedback-tone.js";
 
 const HOLD_THRESHOLD_MS = 180;
+const MIC_HINT_ID = "mic-button-hint";
 
 export type MicButtonVariant = "idle" | "listening" | "speaking" | "interrupted";
 
@@ -44,6 +46,8 @@ export function MicButton({
     wantCaptureRef.current = true;
     if (isCapturingRef.current || pendingStartRef.current) return;
 
+    playFeedbackTone("listen-start");
+
     const p = Promise.resolve(onStart());
     pendingStartRef.current = p;
 
@@ -64,7 +68,10 @@ export function MicButton({
     if (pendingStartRef.current) {
       return;
     }
-    if (isCapturingRef.current) onStop();
+    if (isCapturingRef.current) {
+      playFeedbackTone("listen-stop");
+      onStop();
+    }
   }, [onStop]);
 
   const handlePointerDown = useCallback(
@@ -179,8 +186,10 @@ export function MicButton({
       <button
         type="button"
         disabled={disabled}
+        className={displayActive ? "mic-button is-active" : "mic-button"}
         aria-label={isCapturing ? "Stop microphone" : "Start microphone"}
         aria-pressed={isCapturing}
+        aria-describedby={MIC_HINT_ID}
         onPointerDown={handlePointerDown}
         onPointerUp={endPress}
         onPointerCancel={handlePointerCancel}
@@ -200,7 +209,6 @@ export function MicButton({
           transform: pressed ? "scale(0.96)" : "scale(1)",
           transition:
             "transform 80ms ease, box-shadow 120ms ease, background 120ms ease, border-color 120ms ease",
-          outline: "none",
           touchAction: "none",
           opacity: disabled ? 0.5 : 1,
         }}
@@ -228,6 +236,7 @@ export function MicButton({
         </svg>
       </button>
       <span
+        id={MIC_HINT_ID}
         style={{
           fontSize: 11,
           color: "var(--muted)",

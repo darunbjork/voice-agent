@@ -1,5 +1,5 @@
 # fly.toml — API on Fly.io
-app = "voice-agent-api"
+app = "darun-voice-agent-api"
 primary_region = "arn"
 
 [build]
