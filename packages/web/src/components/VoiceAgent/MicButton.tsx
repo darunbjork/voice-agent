@@ -5,7 +5,7 @@ import { playFeedbackTone } from "../../lib/feedback-tone.js";
 const HOLD_THRESHOLD_MS = 180;
 const MIC_HINT_ID = "mic-button-hint";
 
-export type MicButtonVariant = "idle" | "listening" | "speaking" | "interrupted";
+export type MicButtonVariant = "idle" | "listening" | "speaking" | "error";
 
 export type MicButtonProps = {
   isCapturing: boolean;
@@ -157,7 +157,7 @@ export function MicButton({
 
   const displayActive = isCapturing || pressed;
   const ringColor =
-    variant === "interrupted"
+    variant === "error"
       ? "var(--error)"
       : variant === "speaking"
         ? "var(--iris-soft)"

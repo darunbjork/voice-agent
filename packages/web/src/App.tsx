@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { LatencyBreakdown } from "@voice-agent/shared-types";
 import { useAudioCapture } from "./hooks/useAudioCapture.js";
@@ -16,7 +16,8 @@ import { SkipLink } from "./components/a11y/SkipLink.js";
 import { LiveRegion } from "./components/VoiceAgent/LiveRegion.js";
 import { AdminPage } from "./pages/AdminPage.js";
 import { LatencyHUD, type LatencyStage } from "./components/VoiceAgent/LatencyHUD.js";
-import type { AgentVisualState } from "./components/VoiceAgent/StatusRing.js";
+import type { AgentState } from "./state/agent-state.js";
+import { agentReducer, initialAgentSnapshot } from "./state/agent-state.js";
 import type { ChatMessageModel } from "./types/chat.js";
 import { playFeedbackTone } from "./lib/feedback-tone.js";
 import "./styles/globals.css";
@@ -27,11 +28,38 @@ function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+const statusLabel: Record<AgentState, string> = {
+  idle: "Idle",
+  listening: "Listening",
+  processing: "Processing",
+  speaking: "Speaking",
+  error: "Error",
+  disconnected: "Disconnected",
+};
+
+const waveformColor: Record<AgentState, string> = {
+  idle: "#94a3b8",
+  listening: "#22c55e",
+  processing: "#f59e0b",
+  speaking: "#a78bfa",
+  error: "#ef4444",
+  disconnected: "#64748b",
+};
+
+const liveMessage: Record<AgentState, string> = {
+  idle: "Agent idle",
+  listening: "Listening",
+  processing: "Processing",
+  speaking: "Agent speaking",
+  error: "Something went wrong",
+  disconnected: "Disconnected",
+};
+
 export function App() {
   const [log, setLog] = useState<string[]>([]);
   const [interim, setInterim] = useState("");
   const [messages, setMessages] = useState<ChatMessageModel[]>([]);
-  const [agentThinking, setAgentThinking] = useState(false);
+  const [agent, dispatchAgent] = useReducer(agentReducer, initialAgentSnapshot);
   const [latency, setLatency] = useState<LatencyBreakdown | null>(null);
   const [stage, setStage] = useState<LatencyStage | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -62,29 +90,36 @@ export function App() {
   }, []);
 
   const tts = useTTSPlayer({
-    onDone: () => appendLog("TTS done"),
+    onDone: () => {
+      appendLog("TTS done");
+      dispatchAgent({ type: "TTS_DONE" });
+    },
     onCancel: () => appendLog("TTS cancelled"),
   });
 
   const proxy = useDeepgramProxy({
     handlers: {
-      onSessionId: (id) => appendLog(`session ${id.slice(0, 8)}`),
+      onSessionId: (id) => {
+        appendLog(`session ${id.slice(0, 8)}`);
+        dispatchAgent({ type: "CONNECTED" });
+      },
       onInterim: (text) => setInterim(text),
       onFinal: (text, latencyMs) => {
         setInterim("");
         pushMessage({ role: "user", text });
         appendLog(`final (${latencyMs}ms)`);
+        dispatchAgent({ type: "TRANSCRIPT_FINAL" });
         setStage("llm");
         setLatency({ stt: latencyMs, llm: 0, tts: 0, total: latencyMs });
         tts.prepare();
       },
       onAgentThinking: () => {
-        setAgentThinking(true);
+        dispatchAgent({ type: "AGENT_THINKING" });
         setStage("llm");
         appendLog("thinking…");
       },
       onAgentResponse: (msg) => {
-        setAgentThinking(false);
+        dispatchAgent({ type: "AGENT_RESPONSE" });
         pushMessage({
           role: "agent",
           text: msg.reply.text,
@@ -106,6 +141,7 @@ export function App() {
         if (!ttsFirstByteRef.current && ttsWaitStartedRef.current !== null) {
           const firstByteMs = Math.round(performance.now() - ttsWaitStartedRef.current);
           ttsFirstByteRef.current = true;
+          dispatchAgent({ type: "TTS_START" });
           setStage(null);
           setLatency((prev) => {
             if (!prev) return prev;
@@ -124,7 +160,7 @@ export function App() {
         tts.markDone();
       },
       onError: (code, message) => {
-        setAgentThinking(false);
+        dispatchAgent({ type: "FAILED" });
         setStage(null);
         appendLog(`err ${code}: ${message}`);
         flashFeedback(`Error: ${message}`);
@@ -167,6 +203,7 @@ export function App() {
     onBargeIn: (localWorkMs) => {
       const total = VAD_MIN_SPEECH_MS + localWorkMs;
       appendLog(`barge-in ${total.toFixed(0)}ms`);
+      dispatchAgent({ type: "BARGE_IN" });
     },
   });
 
@@ -181,12 +218,29 @@ export function App() {
   const captureFailed = capture.status === "error";
 
   useEffect(() => {
+    if (capture.status === "capturing") {
+      dispatchAgent({ type: "MIC_ON" });
+      return;
+    }
+    if (capture.status === "idle") {
+      dispatchAgent({ type: "MIC_OFF" });
+    }
+  }, [capture.status]);
+
+  useEffect(() => {
     if (capture.status !== "error") return;
+    dispatchAgent({ type: "FAILED" });
     setStage(null);
-    setAgentThinking(false);
     playFeedbackTone("error");
     appendLog("mic permission error");
   }, [capture.status, appendLog]);
+
+  useEffect(() => {
+    if (proxy.status !== "error") return;
+    dispatchAgent({ type: "FAILED" });
+    setStage(null);
+    appendLog(`proxy error: ${proxy.lastError ?? "unknown"}`);
+  }, [proxy.status, proxy.lastError, appendLog]);
 
   const sendText = useCallback(
     (text: string) => {
@@ -196,6 +250,7 @@ export function App() {
       if (tts.isPlaying) {
         tts.cancel();
         proxy.sendMessage({ type: "barge_in" });
+        dispatchAgent({ type: "BARGE_IN" });
       }
 
       if (!proxy.isConnected) {
@@ -209,38 +264,7 @@ export function App() {
     [proxy, tts, appendLog],
   );
 
-  const visualState: AgentVisualState = useMemo(() => {
-    if (bargeIn.isTriggered || bargeIn.status === "cooldown") {
-      return "interrupted";
-    }
-    if (tts.isPlaying) return "speaking";
-    if (agentThinking) return "processing";
-    if (vad.state === "speech" || capture.isCapturing) return "listening";
-    return "idle";
-  }, [
-    bargeIn.isTriggered,
-    bargeIn.status,
-    tts.isPlaying,
-    agentThinking,
-    vad.state,
-    capture.isCapturing,
-  ]);
-
-  const statusLabel: Record<AgentVisualState, string> = {
-    idle: "Idle",
-    listening: "Listening",
-    processing: "Processing",
-    speaking: "Speaking",
-    interrupted: "Interrupted",
-  };
-
-  const waveformColor: Record<AgentVisualState, string> = {
-    idle: "#94a3b8",
-    listening: "#22c55e",
-    processing: "#f59e0b",
-    speaking: "#a78bfa",
-    interrupted: "#ef4444",
-  };
+  const visualState: AgentState = agent.state;
 
   const handleStop = () => {
     tts.cancel();
@@ -249,7 +273,7 @@ export function App() {
     vad.reset();
     waveform.reset();
     setInterim("");
-    setAgentThinking(false);
+    dispatchAgent({ type: "DISCONNECTED" });
     setStage(null);
     appendLog("stopped");
     flashFeedback("Disconnected — microphone off and session closed");
@@ -258,6 +282,7 @@ export function App() {
   const handleManualBarge = () => {
     tts.cancel();
     proxy.sendMessage({ type: "barge_in" });
+    dispatchAgent({ type: "BARGE_IN" });
     appendLog("manual barge-in");
     flashFeedback("Interrupted — agent stopped speaking");
   };
@@ -267,22 +292,14 @@ export function App() {
     void capture.start();
   };
 
-  const micVariant: "idle" | "listening" | "speaking" | "interrupted" =
-    visualState === "interrupted"
-      ? "interrupted"
-      : visualState === "speaking"
-        ? "speaking"
-        : visualState === "listening"
-          ? "listening"
+  const micVariant: "idle" | "listening" | "speaking" | "error" =
+    visualState === "speaking"
+      ? "speaking"
+      : visualState === "listening"
+        ? "listening"
+        : visualState === "error"
+          ? "error"
           : "idle";
-
-  const liveMessage = {
-    idle: "Agent idle",
-    listening: "Listening",
-    processing: "Processing",
-    speaking: "Agent speaking",
-    interrupted: "Interrupted",
-  }[visualState];
 
   if (view === "admin") {
     return (
@@ -311,7 +328,7 @@ export function App() {
       }}
     >
       <SkipLink />
-      <LiveRegion message={liveMessage} />
+      <LiveRegion message={liveMessage[visualState]} />
 
       <header style={{ textAlign: "center", maxWidth: 480 }}>
         <h1
@@ -410,7 +427,7 @@ export function App() {
             <button
               type="button"
               onClick={handleManualBarge}
-              disabled={!tts.isPlaying}
+              disabled={!tts.isPlaying || bargeIn.status === "cooldown"}
               title="Stop the agent mid-sentence"
               aria-label="Interrupt agent speech"
               style={{

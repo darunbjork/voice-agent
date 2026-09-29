@@ -1,19 +1,19 @@
 import { useEffect, useRef } from "react";
 import gsap from "gsap";
-
-export type AgentVisualState = "idle" | "listening" | "processing" | "speaking" | "interrupted";
+import type { AgentState } from "../../state/agent-state.js";
 
 export type StatusRingProps = {
-  state: AgentVisualState;
+  state: AgentState;
   size?: number;
 };
 
-const STATE_COLORS: Record<AgentVisualState, string> = {
+const STATE_COLORS: Record<AgentState, string> = {
   idle: "#94a3b8",
   listening: "#22c55e",
   processing: "#f59e0b",
   speaking: "#a78bfa",
-  interrupted: "#ef4444",
+  error: "#ef4444",
+  disconnected: "#64748b",
 };
 
 function prefersReducedMotion(): boolean {
@@ -88,7 +88,7 @@ export function StatusRing({ state, size = 72 }: StatusRingProps) {
         });
         break;
 
-      case "interrupted":
+      case "error":
         gsap.to(ring, {
           attr: { "stroke-width": 6 },
           duration: 0.12,
@@ -101,6 +101,9 @@ export function StatusRing({ state, size = 72 }: StatusRingProps) {
           yoyo: true,
           repeat: 5,
         });
+        break;
+
+      case "disconnected":
         break;
 
       case "idle":
