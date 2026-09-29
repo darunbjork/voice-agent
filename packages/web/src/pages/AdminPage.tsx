@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 
 type SessionListItem = {
@@ -58,11 +58,12 @@ function setAuthHeader(password: string): void {
   sessionStorage.setItem(AUTH_STORAGE_KEY, header);
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const auth = getAuthHeader();
   const res = await fetch(`${API_BASE}${url}`, {
     credentials: "include",
     headers: auth ? { authorization: auth } : undefined,
+    signal,
   });
   if (res.status === 401) throw new Error("unauthorized");
   if (!res.ok) throw new Error(`${url} → ${res.status}`);
@@ -83,41 +84,64 @@ export function AdminPage({ onBack }: AdminPageProps) {
   const [passwordInput, setPasswordInput] = useState("");
   const [needPassword, setNeedPassword] = useState(false);
 
+  const abortRef = useRef<AbortController | null>(null);
+
+  // A newer request supersedes an older one; unmount aborts whatever is
+  // still in flight (Rule 30).
+  const nextController = useCallback((): AbortController => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    return controller;
+  }, []);
+
   const load = useCallback(async () => {
+    const controller = nextController();
+    const { signal } = controller;
     setLoading(true);
     setError(null);
     try {
       const [listJson, usageJson] = await Promise.all([
         fetchJson<{ sessions: SessionListItem[]; total: number }>(
           "/api/v1/admin/sessions?limit=30",
+          signal,
         ),
-        fetchJson<UsageSummary>("/api/v1/admin/usage"),
+        fetchJson<UsageSummary>("/api/v1/admin/usage", signal),
       ]);
+      if (signal.aborted) return;
       setSessions(listJson.sessions);
       setTotal(listJson.total);
       setUsage(usageJson);
       setNeedPassword(false);
     } catch (err) {
+      if (signal.aborted) return;
       if (err instanceof Error && err.message === "unauthorized") {
         setNeedPassword(true);
       } else {
         setError(err instanceof Error ? err.message : "Failed to load admin data");
       }
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
-  }, []);
+  }, [nextController]);
 
   useEffect(() => {
     void load();
+    return () => {
+      abortRef.current?.abort();
+    };
   }, [load]);
 
   const openSession = async (id: string): Promise<void> => {
+    const controller = nextController();
+    const { signal } = controller;
     setError(null);
     try {
-      const json = await fetchJson<SessionDetail>(`/api/v1/admin/sessions/${id}`);
+      const json = await fetchJson<SessionDetail>(`/api/v1/admin/sessions/${id}`, signal);
+      if (signal.aborted) return;
       setSelected(json);
     } catch (err) {
+      if (signal.aborted) return;
       setError(err instanceof Error ? err.message : "Failed to load session");
     }
   };
