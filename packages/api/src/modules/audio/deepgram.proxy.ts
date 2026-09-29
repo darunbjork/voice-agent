@@ -72,6 +72,8 @@ function buildDeepgramProxy(
   return createLiveProxy(onTranscript, log, sessionId);
 }
 
+const MOCK_UTTERANCE_GAP_MS = 500;
+
 function createMockProxy(
   onTranscript: TranscriptHandler,
   log: FastifyBaseLogger,
@@ -80,6 +82,8 @@ function createMockProxy(
   let closed = false;
   let chunkCount = 0;
   let interimSent = false;
+  let utteranceDone = false;
+  let lastChunkAt = 0;
 
   log.info({ sessionId }, "Deepgram proxy started in MOCK mode");
 
@@ -90,6 +94,17 @@ function createMockProxy(
 
     sendAudio(_chunk: ArrayBuffer): void {
       if (closed) return;
+
+      const now = Date.now();
+      if (now - lastChunkAt > MOCK_UTTERANCE_GAP_MS) {
+        utteranceDone = false;
+        chunkCount = 0;
+        interimSent = false;
+      }
+      lastChunkAt = now;
+
+      if (utteranceDone) return;
+
       chunkCount += 1;
 
       if (chunkCount === 3 && !interimSent) {
@@ -100,15 +115,14 @@ function createMockProxy(
         });
       }
 
-      if (chunkCount === 8) {
+      if (chunkCount >= 8) {
         const final = mockTranscriptFinal();
         onTranscript({
           type: "transcript_final",
           text: final.text,
           latencyMs: final.latencyMs,
         });
-        chunkCount = 0;
-        interimSent = false;
+        utteranceDone = true;
       }
     },
 

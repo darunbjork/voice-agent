@@ -135,7 +135,7 @@ function pushDerived() {
     "mock-stt-final",
     "Mock STT final after the 8th audio chunk",
     ">=256 ms of captured audio (8 x 32 ms)",
-    "packages/api/src/modules/audio/deepgram.proxy.ts:94 (chunkCount === 8)",
+    "packages/api/src/modules/audio/deepgram.proxy.ts (mock final after the 8th chunk of one audio burst)",
   );
   recordDerived(
     "mock-tts-cadence",
