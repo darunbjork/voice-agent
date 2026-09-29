@@ -55,6 +55,7 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
   handlersRef.current = handlers;
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<ClientAudioMessage[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current !== null) {
@@ -117,6 +118,20 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        intentionalCloseRef.current = true;
+        clearReconnectTimer();
+        try {
+          ws.close();
+        } catch {}
+      },
+      { once: true },
+    );
+
     ws.onopen = () => {
       retriesRef.current = 0;
       setStatus("connected");
@@ -154,6 +169,7 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
     };
 
     ws.onclose = () => {
+      if (abortRef.current === controller) abortRef.current = null;
       wsRef.current = null;
       setSessionId(null);
 
@@ -192,14 +208,21 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
     retriesRef.current = 0;
     pendingRef.current = [];
 
-    if (wsRef.current) {
-      if (wsRef.current.readyState === WebSocket.OPEN) {
-        const endMsg: ClientAudioMessage = { type: "session_end" };
-        wsRef.current.send(JSON.stringify(endMsg));
-      }
-      wsRef.current.close();
-      wsRef.current = null;
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      const endMsg: ClientAudioMessage = { type: "session_end" };
+      ws.send(JSON.stringify(endMsg));
     }
+
+    abortRef.current?.abort();
+    abortRef.current = null;
+
+    if (ws) {
+      try {
+        ws.close();
+      } catch {}
+    }
+    wsRef.current = null;
     setStatus("disconnected");
     setSessionId(null);
   }, [clearReconnectTimer]);
@@ -228,6 +251,8 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
     return () => {
       intentionalCloseRef.current = true;
       clearReconnectTimer();
+      abortRef.current?.abort();
+      abortRef.current = null;
       wsRef.current?.close();
       wsRef.current = null;
     };
