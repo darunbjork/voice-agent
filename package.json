@@ -15,6 +15,7 @@
     "lint": "eslint .",
     "type-check": "turbo run type-check",
     "test": "turbo run test",
+    "test:coverage": "turbo run test:coverage",
     "clean": "turbo run clean"
   },
   "devDependencies": {

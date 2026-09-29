@@ -84,7 +84,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @voice-agent/api exec prisma generate
       - run: pnpm --filter @voice-agent/api exec prisma migrate deploy
-      - run: pnpm turbo test
+      - run: pnpm test:coverage
 
   build:
     name: Build

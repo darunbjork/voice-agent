@@ -10,6 +10,9 @@ export default defineConfig({
       reporter: ["text", "lcov"],
       include: ["src/**/*.ts"],
       exclude: ["src/generated/**", "src/**/*.test.ts"],
+      thresholds: {
+        statements: 70,
+      },
     },
     env: {
       NODE_ENV: "test",

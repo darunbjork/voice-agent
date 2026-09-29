@@ -23,6 +23,7 @@
     "dev": { "dependsOn": ["^build"], "cache": false, "persistent": true },
     "type-check": { "dependsOn": ["^build"], "outputs": [] },
     "test": { "dependsOn": ["^build"], "outputs": [] },
+    "test:coverage": { "dependsOn": ["^build"], "outputs": [] },
     "clean": { "cache": false }
   }
 }
