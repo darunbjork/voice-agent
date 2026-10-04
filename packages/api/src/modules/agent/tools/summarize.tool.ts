@@ -12,7 +12,7 @@ export type SummarizeToolResult = {
 
 function stripCommandPrefix(text: string): string {
   return text
-    .replace(/^\s*(?:please\s+)?(?:summarize|summarise|summary|recap|tldr|tl;dr)\s*[:\-]?\s*/i, "")
+    .replace(/^\s*(?:please\s+)?(?:summarize|summarise|summary|recap|tldr|tl;dr)\s*[:-]?\s*/i, "")
     .trim();
 }
 
