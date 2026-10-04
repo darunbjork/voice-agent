@@ -10,14 +10,20 @@ export type SummarizeToolResult = {
   replyHint: string;
 };
 
+function stripCommandPrefix(text: string): string {
+  return text
+    .replace(/^\s*(?:please\s+)?(?:summarize|summarise|summary|recap|tldr|tl;dr)\s*[:\-]?\s*/i, "")
+    .trim();
+}
+
 export async function summarizeTool(input: SummarizeToolInput): Promise<SummarizeToolResult> {
-  const source = input.userText.trim();
-  const points = splitIntoPoints(source);
+  const cleaned = stripCommandPrefix(input.userText.trim());
+  const points = splitIntoPoints(cleaned);
 
   const card: SummaryCard = {
     type: "summary",
     points,
-    source: source.length > 80 ? `${source.slice(0, 77)}…` : source,
+    source: cleaned.length > 80 ? `${cleaned.slice(0, 77)}…` : cleaned,
   };
 
   return {
