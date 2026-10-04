@@ -1,10 +1,3 @@
-// Playback-paced reveal replaces true token streaming: the reply appears
-// word-by-word, paced by the Web Audio playback clock (tts.getProgress),
-// never by LLM tokens.
-// Deferral: if VOICE_MOCK=false is ever deployed, this replacement should be
-// revisited to add true LLM token streaming via agent_delta. Decision made
-// under the mock-mode-deployed assumption as of Phase 2.
-
 export type RevealStatus = "idle" | "revealing" | "complete";
 
 export interface RevealSnapshot {
@@ -59,7 +52,7 @@ export function revealReducer(state: RevealSnapshot, event: RevealEvent): Reveal
       return { ...state, revealedWords };
     }
     case "COMPLETE": {
-      if (state.status === "idle") return state;
+      if (state.status === "idle" || state.status === "complete") return state;
       return { status: "complete", totalWords: state.totalWords, revealedWords: state.totalWords };
     }
     case "RESET":

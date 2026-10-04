@@ -8,5 +8,7 @@ export type ChatMessageModel = {
   text: string;
   card?: ResponseCard | null;
   intent?: IntentType;
+  turnIndex?: number;
+  sessionId?: string;
   createdAt: string;
 };

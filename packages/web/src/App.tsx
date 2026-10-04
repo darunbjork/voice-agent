@@ -78,8 +78,17 @@ export function App() {
     };
   }, []);
 
+  const turnIndexRef = useRef(0);
+  const inFlightTurnRef = useRef<number | null>(null);
+
   const pushMessage = useCallback((msg: Omit<ChatMessageModel, "id" | "createdAt">) => {
-    setMessages((prev) => [...prev, { ...msg, id: newId(), createdAt: new Date().toISOString() }]);
+    setMessages((prev) => {
+      const isDupe = prev.some(
+        (m) => m.role === msg.role && m.turnIndex === msg.turnIndex && m.text === msg.text,
+      );
+      if (isDupe) return prev;
+      return [...prev, { ...msg, id: newId(), createdAt: new Date().toISOString() }];
+    });
   }, []);
 
   const [reveal, dispatchReveal] = useReducer(revealReducer, initialRevealState);
@@ -109,8 +118,9 @@ export function App() {
       },
       onInterim: (text) => setInterim(text),
       onFinal: (text, latencyMs) => {
+        inFlightTurnRef.current = null;
         setInterim("");
-        pushMessage({ role: "user", text });
+        pushMessage({ role: "user", text, turnIndex: turnIndexRef.current });
         appendLog(`final (${latencyMs}ms)`);
         dispatchAgent({ type: "TRANSCRIPT_FINAL" });
         setStage("llm");
@@ -129,7 +139,10 @@ export function App() {
           text: msg.reply.text,
           card: msg.reply.card,
           intent: msg.reply.intent,
+          turnIndex: msg.reply.turnIndex,
+          sessionId: msg.reply.sessionId,
         });
+        turnIndexRef.current = Math.max(turnIndexRef.current, msg.reply.turnIndex + 1);
         setStage("tts");
         setLatency({
           stt: msg.reply.latencyMs.stt,
@@ -171,6 +184,7 @@ export function App() {
         tts.markDone();
       },
       onError: (code, message) => {
+        inFlightTurnRef.current = null;
         dispatchAgent({ type: "FAILED" });
         dispatchReveal({ type: "COMPLETE" });
         setStage(null);
@@ -261,6 +275,7 @@ export function App() {
 
   useEffect(() => {
     if (proxy.status !== "error") return;
+    inFlightTurnRef.current = null;
     dispatchAgent({ type: "FAILED" });
     setStage(null);
     appendLog(`proxy error: ${proxy.lastError ?? "unknown"}`);
@@ -268,8 +283,14 @@ export function App() {
 
   const sendText = useCallback(
     (text: string) => {
+      if (inFlightTurnRef.current !== null) return; // one at a time
+      inFlightTurnRef.current = performance.now();
+
       const trimmed = text.trim();
-      if (!trimmed) return;
+      if (!trimmed) {
+        inFlightTurnRef.current = null;
+        return;
+      }
 
       if (tts.isPlaying) {
         tts.cancel();
@@ -291,6 +312,8 @@ export function App() {
   const visualState: AgentState = agent.state;
 
   const handleStop = () => {
+    inFlightTurnRef.current = null;
+    turnIndexRef.current = 0;
     tts.cancel();
     capture.stop();
     proxy.disconnect();
@@ -412,7 +435,7 @@ export function App() {
             revealedWords={reveal.status === "revealing" ? reveal.revealedWords : undefined}
           />
 
-          <QuickActions onAction={sendText} />
+          <QuickActions onAction={sendText} disabled={visualState === "processing"} />
 
           <MicButton
             isCapturing={capture.isCapturing}
@@ -475,7 +498,7 @@ export function App() {
             </button>
           </div>
 
-          <TextInput onSubmitText={sendText} />
+          <TextInput onSubmitText={sendText} disabled={visualState === "processing"} />
         </VoiceAgentLayout>
       </main>
 
