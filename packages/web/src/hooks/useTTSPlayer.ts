@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { computeRms } from "../lib/audio-utils.js";
 import { computePlaybackProgress } from "../lib/playback.js";
 import { prefersReducedMotion } from "../lib/motion.js";
@@ -206,14 +206,17 @@ export function useTTSPlayer(options: UseTTSPlayerOptions = {}) {
     };
   }, [stopLevelLoop]);
 
-  return {
-    status,
-    error,
-    isPlaying: status === "playing",
-    enqueue,
-    markDone,
-    cancel,
-    prepare,
-    getProgress,
-  };
+  return useMemo(
+    () => ({
+      status,
+      error,
+      isPlaying: status === "playing",
+      enqueue,
+      markDone,
+      cancel,
+      prepare,
+      getProgress,
+    }),
+    [status, error, enqueue, markDone, cancel, prepare, getProgress],
+  );
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared-types";
 
 export type ProxyStatus = "disconnected" | "connecting" | "connected" | "reconnecting" | "error";
@@ -262,14 +262,17 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
     };
   }, [clearReconnectTimer]);
 
-  return {
-    status,
-    sessionId,
-    lastError,
-    connect,
-    disconnect,
-    sendAudio,
-    sendMessage,
-    isConnected: status === "connected",
-  };
+  return useMemo(
+    () => ({
+      status,
+      sessionId,
+      lastError,
+      connect,
+      disconnect,
+      sendAudio,
+      sendMessage,
+      isConnected: status === "connected",
+    }),
+    [status, sessionId, lastError, connect, disconnect, sendAudio, sendMessage],
+  );
 }

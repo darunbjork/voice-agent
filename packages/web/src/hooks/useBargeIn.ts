@@ -32,7 +32,11 @@ export function useBargeIn(options: UseBargeInOptions) {
   const speechStartedAtRef = useRef<number | null>(null);
   const cooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onBargeInRef = useRef(onBargeIn);
+  const cancelTtsRef = useRef(cancelTts);
+  const sendBargeInRef = useRef(sendBargeIn);
   onBargeInRef.current = onBargeIn;
+  cancelTtsRef.current = cancelTts;
+  sendBargeInRef.current = sendBargeIn;
 
   const clearCooldownTimer = useCallback(() => {
     if (cooldownTimerRef.current !== null) {
@@ -65,8 +69,8 @@ export function useBargeIn(options: UseBargeInOptions) {
 
       if (spokenFor >= minSpeechMs) {
         const t0 = performance.now();
-        cancelTts();
-        sendBargeIn();
+        cancelTtsRef.current();
+        sendBargeInRef.current();
         const localWorkMs = performance.now() - t0;
 
         setLastLocalWorkMs(localWorkMs);
@@ -83,7 +87,7 @@ export function useBargeIn(options: UseBargeInOptions) {
     } else {
       speechStartedAtRef.current = null;
     }
-  }, [isUserSpeaking, status, minSpeechMs, cancelTts, sendBargeIn, cooldownMs, clearCooldownTimer]);
+  }, [isUserSpeaking, status, minSpeechMs, cooldownMs, clearCooldownTimer]);
 
   useEffect(() => {
     return () => {
