@@ -15,9 +15,10 @@ import {
   CircuitOpenError,
 } from "../../utils/circuit-breaker.js";
 import { GeminiAgentOutputSchema, type GeminiAgentOutputParsed } from "./gemini.schema.js";
+import { GEMINI_MODEL_ID } from "./gemini.tools.js";
 import { AgentTurnAbortedError, isTurnAborted } from "../../utils/turn-abort.js";
 
-const MODEL_ID = "gemini-1.5-flash";
+const MODEL_ID = GEMINI_MODEL_ID;
 
 const SYSTEM_PROMPT = `You are a voice assistant. You respond in JSON only.
 Classify the user's intent and return the correct card structure.
