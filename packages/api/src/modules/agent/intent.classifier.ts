@@ -38,7 +38,9 @@ const KEYWORD_RULES: KeywordRule[] = [
       /\bdon'?t\s+let\s+me\s+forget\b/i,
     ],
     extract: (text: string): Record<string, string> => {
-      const m = text.match(/\b(?:remind(?:er)?\s+(?:me\s+)?(?:to\s+)?|remember\s+to\s+)(.+)$/i);
+      const m = text.match(
+        /\b(?:remind(?:er)?\s+(?:me\s+)?(?:to\s+)?|remember\s+to\s+)(.+?)(?:\s+at\s+|\s+tomorrow|\s+today|$)/i,
+      );
       return m?.[1] ? { note: m[1].trim() } : {};
     },
   },

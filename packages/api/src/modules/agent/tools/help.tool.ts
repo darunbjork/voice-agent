@@ -8,15 +8,15 @@ export type HelpToolResult = {
 const COMMANDS: HelpCard["commands"] = [
   {
     name: "weather",
-    description: "Current weather for a city (e.g. “weather in Stockholm”)",
+    description: 'Current weather for a city (e.g. "weather in London")',
   },
   {
     name: "reminder",
-    description: "Set a quick reminder (e.g. “remind me to call Alex”)",
+    description: 'Set a quick reminder (e.g. "remind me to call the recruiter")',
   },
   {
     name: "translate",
-    description: "Translate a short phrase (e.g. “translate hello in swedish”)",
+    description: 'Translate a short phrase (e.g. "translate hello in swedish")',
   },
   {
     name: "summarize",

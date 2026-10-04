@@ -5,6 +5,7 @@ import { translateTool } from "../modules/agent/tools/translate.tool.js";
 import { summarizeTool } from "../modules/agent/tools/summarize.tool.js";
 import { helpTool } from "../modules/agent/tools/help.tool.js";
 import { runTool, listRegisteredIntents } from "../modules/agent/tool.registry.js";
+import { classifyByKeywords } from "../modules/agent/intent.classifier.js";
 
 describe("tool handlers", () => {
   it("weather returns a weather card with the requested location", async () => {
@@ -85,5 +86,53 @@ describe("tool handlers", () => {
     const r = await runTool("fallback", { userText: "xyz", slots: {} });
     expect(r.card).toBeNull();
     expect(r.replyHint).toBeNull();
+  });
+
+  it("reminder does not duplicate the trailing time word", async () => {
+    const text = "Remind me to follow up with the recruiter tomorrow";
+    const fast = classifyByKeywords(text);
+    expect(fast?.intent).toBe("reminder");
+    const r = await reminderTool({ userText: text, slots: fast?.slots ?? {} });
+    expect(r.replyHint).not.toMatch(/tomorrow.*tomorrow/i);
+    expect(r.card.note.toLowerCase()).not.toMatch(/tomorrow$/);
+    expect(r.card.time.toLowerCase()).toBe("tomorrow");
+  });
+
+  it("reminder stops the note before an at-time", async () => {
+    const text = "Remind me to call Alex at 5pm";
+    const fast = classifyByKeywords(text);
+    expect(fast?.intent).toBe("reminder");
+    const r = await reminderTool({ userText: text, slots: fast?.slots ?? {} });
+    expect(r.card.note).toBe("call Alex");
+    expect(r.card.time).toBe("at 5pm");
+  });
+
+  it("summarize strips the command prefix from points and source", async () => {
+    const r = await summarizeTool({
+      userText: "Summarize: we shipped the API, fixed the tests, and wrote the docs.",
+      slots: {},
+    });
+    expect(r.card.points[0]).not.toMatch(/^summarize/i);
+    expect(r.card.source).not.toMatch(/^summarize/i);
+    expect(r.card.points.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("summarize strips the Recap: prefix", async () => {
+    const r = await summarizeTool({ userText: "Recap: one. two. three.", slots: {} });
+    expect(r.card.points[0]).not.toMatch(/^recap/i);
+    expect(r.card.source).not.toMatch(/^recap/i);
+    expect(r.card.points.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("summarize strips a leading please", async () => {
+    const r = await summarizeTool({ userText: "please summarize: alpha, beta", slots: {} });
+    expect(r.card.points[0]).toBe("alpha");
+  });
+
+  it("help has no hardcoded example names", async () => {
+    const r = await helpTool();
+    for (const cmd of r.card.commands) {
+      expect(cmd.description).not.toMatch(/alex|stockholm/i);
+    }
   });
 });
