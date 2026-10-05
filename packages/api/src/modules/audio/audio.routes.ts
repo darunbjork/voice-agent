@@ -36,6 +36,11 @@ export async function audioRoutes(
     let turnAbort: AbortController | null = null;
     const sessionAbort = new AbortController();
 
+    let audioFramesIn = 0;
+    let audioBytesIn = 0;
+    let framesBeforeProxy = 0;
+    let oversizeFrames = 0;
+
     const sendSafe = (msg: ServerAudioMessage): void => send(socket, msg);
 
     const abortActiveTurn = (reason: string): void => {
@@ -179,18 +184,28 @@ export async function audioRoutes(
     });
 
     const handleClientMessage = (raw: Buffer | ArrayBuffer | Buffer[], isBinary: boolean): void => {
-      if (!proxy) return;
+      if (!proxy) {
+        if (isBinary) framesBeforeProxy += 1;
+        return;
+      }
 
       if (isBinary) {
         const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer);
 
         if (buffer.byteLength > MAX_PCM_CHUNK_BYTES) {
+          oversizeFrames += 1;
           sendSafe({
             type: "error",
             code: "chunk_too_large",
             message: `PCM chunk exceeds ${MAX_PCM_CHUNK_BYTES} bytes`,
           });
           return;
+        }
+
+        audioFramesIn += 1;
+        audioBytesIn += buffer.byteLength;
+        if (audioFramesIn === 1) {
+          log.info({ byteLength: buffer.byteLength }, "First audio frame received");
         }
 
         const arrayBuffer = new ArrayBuffer(buffer.byteLength);
@@ -233,7 +248,10 @@ export async function audioRoutes(
     });
 
     socket.on("close", () => {
-      log.info("Audio WebSocket closed by client");
+      log.info(
+        { audioFramesIn, audioBytesIn, framesBeforeProxy, oversizeFrames },
+        "Audio WebSocket closed by client",
+      );
       abortActiveTurn("socket_closed");
       currentTts?.cancel();
       currentTts = null;

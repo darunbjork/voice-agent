@@ -56,6 +56,17 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<ClientAudioMessage[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  const framesSentRef = useRef(0);
+  const framesDroppedRef = useRef(0);
+  const firstSendLoggedRef = useRef(false);
+  const firstDropLoggedRef = useRef(false);
+
+  const logAudioSummary = useCallback((reason: string) => {
+    if (framesSentRef.current === 0 && framesDroppedRef.current === 0) return;
+    console.info(
+      `[useDeepgramProxy] audio summary (${reason}): sent=${framesSentRef.current} droppedNotOpen=${framesDroppedRef.current}`,
+    );
+  }, []);
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current !== null) {
@@ -181,6 +192,7 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
       }
 
       if (retriesRef.current >= maxRetries) {
+        logAudioSummary("reconnect-failed");
         setStatus("error");
         setLastError(`Failed after ${maxRetries} reconnect attempts`);
         return;
@@ -196,15 +208,20 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
         connectInternal();
       }, delay);
     };
-  }, [dispatch, maxRetries, baseDelayMs, clearReconnectTimer]);
+  }, [dispatch, maxRetries, baseDelayMs, clearReconnectTimer, logAudioSummary]);
 
   const connect = useCallback(() => {
     retriesRef.current = 0;
+    framesSentRef.current = 0;
+    framesDroppedRef.current = 0;
+    firstSendLoggedRef.current = false;
+    firstDropLoggedRef.current = false;
     clearReconnectTimer();
     connectInternal();
   }, [connectInternal, clearReconnectTimer]);
 
   const disconnect = useCallback(() => {
+    logAudioSummary("disconnect");
     intentionalCloseRef.current = true;
     clearReconnectTimer();
     retriesRef.current = 0;
@@ -229,12 +246,26 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
     wsRef.current = null;
     setStatus("disconnected");
     setSessionId(null);
-  }, [clearReconnectTimer]);
+  }, [clearReconnectTimer, logAudioSummary]);
 
   const sendAudio = useCallback((chunk: ArrayBuffer) => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(chunk);
+      framesSentRef.current += 1;
+      if (!firstSendLoggedRef.current) {
+        firstSendLoggedRef.current = true;
+        console.info(`[useDeepgramProxy] first audio frame sent (${chunk.byteLength} bytes)`);
+      }
+      return;
+    }
+
+    framesDroppedRef.current += 1;
+    if (!firstDropLoggedRef.current) {
+      firstDropLoggedRef.current = true;
+      console.warn(
+        `[useDeepgramProxy] audio frame dropped — socket not OPEN (state=${ws?.readyState ?? "none"})`,
+      );
     }
   }, []);
 
