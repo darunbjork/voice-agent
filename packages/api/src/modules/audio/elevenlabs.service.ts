@@ -8,6 +8,7 @@ import {
   recordSuccess,
   recordFailure,
   CircuitOpenError,
+  type ProviderName,
 } from "../../utils/circuit-breaker.js";
 import type { ServerAudioMessage } from "@voice-agent/shared-types";
 
@@ -20,6 +21,9 @@ export interface TtsStream {
 
 const ELEVEN_MODEL = "eleven_turbo_v2_5";
 const OUTPUT_FORMAT = "pcm_16000";
+const DEEPGRAM_URL =
+  "https://api.deepgram.com/v1/speak" +
+  "?model=aura-asteria-en&encoding=linear16&sample_rate=16000&container=none";
 
 export function streamTts(
   text: string,
@@ -116,7 +120,9 @@ function streamLiveTts(
   log: FastifyBaseLogger,
   sessionId: string,
 ): TtsStream {
-  if (!env.ELEVENLABS_API_KEY) {
+  const canFallback = Boolean(env.DEEPGRAM_API_KEY);
+
+  if (!env.ELEVENLABS_API_KEY && !canFallback) {
     throw new Error("ELEVENLABS_API_KEY is required when VOICE_MOCK=false");
   }
 
@@ -125,7 +131,7 @@ function streamLiveTts(
   let sequence = 0;
 
   const voiceId = env.ELEVENLABS_VOICE_ID;
-  const url =
+  const elevenUrl =
     `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream` +
     `?output_format=${OUTPUT_FORMAT}&model_id=${ELEVEN_MODEL}`;
 
@@ -138,56 +144,130 @@ function streamLiveTts(
     });
   };
 
-  // Pre-flight circuit check. Bubbles CircuitOpenError up synchronously so
-  // streamTts can convert it into a wire error message.
-  assertCircuitClosed("elevenlabs");
+  // Pre-flight circuit check for ElevenLabs. Without a fallback this
+  // throws synchronously so streamTts can convert it to a wire error.
+  let elevenCircuitOk = true;
+  if (env.ELEVENLABS_API_KEY) {
+    try {
+      assertCircuitClosed("elevenlabs");
+    } catch {
+      elevenCircuitOk = false;
+    }
+  } else {
+    elevenCircuitOk = false;
+  }
+  if (!elevenCircuitOk && !canFallback) {
+    if (env.ELEVENLABS_API_KEY) throw new CircuitOpenError("elevenlabs");
+    throw new Error("ELEVENLABS_API_KEY is required when VOICE_MOCK=false");
+  }
+
+  type Attempt = { ok: true } | { ok: false; code: string; message: string };
+
+  const pushChunk = (value: Uint8Array<ArrayBuffer>): void => {
+    const audio = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+    onChunk({ type: "tts_chunk", audio, sequenceNum: sequence++ });
+  };
+
+  const attemptElevenLabs = async (): Promise<Attempt> => {
+    const res = await fetch(elevenUrl, {
+      method: "POST",
+      headers: {
+        "xi-api-key": env.ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text,
+        model_id: ELEVEN_MODEL,
+        voice_settings: { stability: 0.4, similarity_boost: 0.75 },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok || !res.body) {
+      const errText = await res.text().catch(() => res.statusText);
+      return { ok: false, code: "tts_http_error", message: `ElevenLabs ${res.status}: ${errText}` };
+    }
+
+    const reader = res.body.getReader();
+    while (!cancelled) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value && value.byteLength > 0) pushChunk(value);
+    }
+    return { ok: true };
+  };
+
+  const attemptDeepgramAura = async (): Promise<void> => {
+    const res = await fetch(DEEPGRAM_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ text }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok || !res.body) {
+      const errText = await res.text().catch(() => res.statusText);
+      throw new Error(`Deepgram ${res.status}: ${errText}`);
+    }
+
+    const reader = res.body.getReader();
+    while (!cancelled) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value && value.byteLength > 0) pushChunk(value);
+    }
+  };
 
   void (async () => {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "xi-api-key": env.ELEVENLABS_API_KEY,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text,
-          model_id: ELEVEN_MODEL,
-          voice_settings: { stability: 0.4, similarity_boost: 0.75 },
-        }),
-        signal: controller.signal,
-      });
+    let activeProvider: ProviderName = elevenCircuitOk ? "elevenlabs" : "deepgram";
 
-      if (!res.ok || !res.body) {
-        const errText = await res.text().catch(() => res.statusText);
-        recordFailure("elevenlabs");
-        onChunk({
-          type: "error",
-          code: "tts_http_error",
-          message: `ElevenLabs ${res.status}: ${errText}`,
-        });
+    if (elevenCircuitOk) {
+      let attempt: Attempt;
+      try {
+        attempt = await attemptElevenLabs();
+      } catch (err) {
+        attempt = {
+          ok: false,
+          code: "tts_stream_error",
+          message: err instanceof Error ? err.message : "ElevenLabs request failed",
+        };
+      }
+      if (cancelled) return;
+
+      if (attempt.ok) {
+        recordSuccess("elevenlabs");
+        emitDone();
+        log.info({ sessionId, chunks: sequence }, "Live TTS done (ElevenLabs)");
         return;
       }
 
-      const reader = res.body.getReader();
-      while (!cancelled) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value && value.byteLength > 0) {
-          const audio = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-          onChunk({ type: "tts_chunk", audio, sequenceNum: sequence++ });
-        }
+      recordFailure("elevenlabs");
+      if (!canFallback) {
+        onChunk({ type: "error", code: attempt.code, message: attempt.message });
+        return;
       }
+      log.warn(
+        { sessionId, reason: attempt.message },
+        "ElevenLabs failed — falling back to Deepgram Aura",
+      );
+      activeProvider = "deepgram";
+    } else {
+      log.info({ sessionId }, "Using Deepgram Aura TTS (ElevenLabs unavailable)");
+    }
 
-      if (!cancelled) {
-        recordSuccess("elevenlabs");
-        emitDone();
-        log.info({ sessionId, chunks: sequence }, "Live TTS done");
-      }
+    try {
+      await attemptDeepgramAura();
+      if (cancelled) return;
+      recordSuccess("deepgram");
+      emitDone();
+      log.info({ sessionId, chunks: sequence }, "Live TTS done (Deepgram Aura)");
     } catch (err) {
       if (cancelled) return;
-      recordFailure("elevenlabs");
-      log.error({ err, sessionId }, "Live TTS failed");
+      recordFailure(activeProvider);
+      log.error({ err, sessionId, provider: activeProvider }, "TTS failed");
       onChunk({
         type: "error",
         code: "tts_stream_error",

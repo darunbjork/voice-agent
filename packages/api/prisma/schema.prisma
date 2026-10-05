@@ -62,3 +62,14 @@ model DailyUsage {
   @@unique([date])
   @@map("daily_usage")
 }
+
+model Reminder {
+  id          String    @id @default(cuid())
+  note        String
+  timeText    String
+  scheduledAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([scheduledAt])
+  @@map("reminders")
+}

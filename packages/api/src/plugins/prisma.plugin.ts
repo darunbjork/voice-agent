@@ -1,11 +1,9 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
-import { PrismaClient } from "../generated/prisma/index.js";
+import { getPrisma, closePrisma } from "../utils/db.js";
 
 async function prismaPlugin(app: FastifyInstance): Promise<void> {
-  const prisma = new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
-  });
+  const prisma = getPrisma();
 
   await prisma.$connect();
   app.log.info("Prisma connected to Postgres");
@@ -13,7 +11,7 @@ async function prismaPlugin(app: FastifyInstance): Promise<void> {
   app.decorate("prisma", prisma);
 
   app.addHook("onClose", async (): Promise<void> => {
-    await prisma.$disconnect();
+    await closePrisma();
     app.log.info("Prisma disconnected");
   });
 }
