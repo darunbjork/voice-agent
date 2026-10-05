@@ -22,7 +22,7 @@ const KEYWORD_RULES: KeywordRule[] = [
   {
     intent: "weather",
     patterns: [
-      /\b(weather|temperature|forecast|rain|sunny|cloudy|humid)\b/i,
+      /\b(weather|temperature|forecast|rain|sunny|cloudy|humid)\b(?!\s+means?\s+in\b)/i,
       /\bhow\s+(hot|cold|warm)\b/i,
       /\bwhat(?:'s|\s+is)\s+the\s+weather\b/i,
     ],
@@ -56,6 +56,19 @@ const KEYWORD_RULES: KeywordRule[] = [
       if (m?.[1] && m[2]) {
         const original = m[1].replace(/^["'"]|["'"]$/g, "").trim();
         return { original, toLang: m[2].toLowerCase() };
+      }
+      const clean = (s: string): string => s.replace(/^["'"]|["'"]$/g, "").trim();
+      const w = text.match(
+        /\b(?:what(?:'s|\s+)?)?(?:is|dose|does|do)\s+(?:the\s+)?(?:word\s+)?(.+?)\s+means?\s+in\s+(\w+)/i,
+      );
+      if (w?.[1] && w[2]) {
+        return { original: clean(w[1]), toLang: w[2].toLowerCase() };
+      }
+      const wof = text.match(
+        /\b(?:what(?:'s|\s+)?)?is\s+(?:the\s+)?meaning\s+of\s+(.+?)\s+in\s+(\w+)/i,
+      );
+      if (wof?.[1] && wof[2]) {
+        return { original: clean(wof[1]), toLang: wof[2].toLowerCase() };
       }
       return {};
     },

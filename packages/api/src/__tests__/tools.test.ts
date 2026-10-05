@@ -52,6 +52,33 @@ describe("tool handlers", () => {
     expect(r.replyHint).toContain("do not have a translation");
   });
 
+  it("translate uses the asked word for 'what does X mean in <lang>'", async () => {
+    const text = "What does the word high mean in Swedish?";
+    const fast = classifyByKeywords(text);
+    expect(fast?.intent).toBe("translate");
+    const r = await translateTool({ userText: text, slots: fast?.slots ?? {} });
+    expect(r.card.original.toLowerCase()).toBe("high");
+    expect(r.replyHint.toLowerCase()).toContain("high");
+  });
+
+  it("translate extracts the original from meaning questions without slots", async () => {
+    const r = await translateTool({
+      userText: "What dose good-bye mean in Swedish?",
+      slots: {},
+    });
+    expect(r.card.original.toLowerCase()).toBe("good-bye");
+    expect(r.card.original.toLowerCase()).not.toBe("hello");
+  });
+
+  it("translate extracts the original when 'what' is missing from the transcript", async () => {
+    const r = await translateTool({
+      userText: "Does the word high mean in Swedish?",
+      slots: {},
+    });
+    expect(r.card.original.toLowerCase()).toBe("high");
+    expect(r.card.original.toLowerCase()).not.toBe("hello");
+  });
+
   it("summarize returns at least 2 points for multi-sentence input", async () => {
     const r = await summarizeTool({
       userText: "First point. Second point. Third point.",

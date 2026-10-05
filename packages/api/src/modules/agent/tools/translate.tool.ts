@@ -82,17 +82,19 @@ export async function translateTool(input: TranslateToolInput): Promise<Translat
 }
 
 async function liveTranslate(original: string, display: string): Promise<string | null> {
-  try {
-    const out = await generateToolText(
-      TRANSLATE_SYSTEM_PROMPT,
-      `Translate from English to ${display}:\n${original}`,
-    );
-    return stripWrappingQuotes(out);
-  } catch {
-    // Provider unavailable, over budget, or circuit open — fall back to
-    // the demo dictionary (and its honest "no translation" reply).
-    return null;
+  const prompt = `Translate from English to ${display}:\n${original}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const out = await generateToolText(TRANSLATE_SYSTEM_PROMPT, prompt);
+      return stripWrappingQuotes(out);
+    } catch {
+      // Provider unavailable, over budget, or circuit open — retry once for
+      // transient spikes, then fall back to the demo dictionary (and its
+      // honest "no translation" reply).
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 700));
+    }
   }
+  return null;
 }
 
 function stripWrappingQuotes(text: string): string {
@@ -102,8 +104,18 @@ function stripWrappingQuotes(text: string): string {
 }
 
 function extractOriginal(text: string): string | null {
-  const m = text.match(/\b(?:translate|say)\s+["']?(.+?)["']?\s+in\s+\w+/i);
-  return m?.[1]?.trim() ?? null;
+  const say = text.match(/\b(?:translate|say)\s+["']?(.+?)["']?\s+in\s+\w+/i);
+  if (say?.[1]) return say[1].trim();
+  const strip = (s: string): string => s.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+  const mean = text.match(
+    /\b(?:what(?:'s|\s+)?)?(?:is|dose|does|do)\s+(?:the\s+)?(?:word\s+)?(.+?)\s+means?\s+in\s+\w+/i,
+  );
+  if (mean?.[1]) return strip(mean[1]) || null;
+  const meanOf = text.match(
+    /\b(?:what(?:'s|\s+)?)?is\s+(?:the\s+)?meaning\s+of\s+(.+?)\s+in\s+\w+/i,
+  );
+  if (meanOf?.[1]) return strip(meanOf[1]) || null;
+  return null;
 }
 
 function extractToLang(text: string): string | null {

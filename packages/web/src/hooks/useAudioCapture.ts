@@ -146,8 +146,8 @@ export function useAudioCapture(
         }
 
         const int16 = float32ToInt16(samples);
-        const arrayBuffer = new ArrayBuffer(int16.byteLength);
-        new Uint8Array(arrayBuffer).set(int16);
+        const arrayBuffer = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength).slice()
+          .buffer as ArrayBuffer;
         const { chunk, truncated } = clampChunk(arrayBuffer);
 
         if (truncated) {
