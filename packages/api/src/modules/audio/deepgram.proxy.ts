@@ -128,7 +128,7 @@ function createMockProxy(
 
     close(): void {
       closed = true;
-      log.info({ sessionId }, "Mock Deepgram proxy closed");
+      log.info({ chunkCount, finalSent: utteranceDone }, "Mock Deepgram proxy closed");
     },
   };
 }
@@ -145,6 +145,10 @@ function createLiveProxy(
   let closed = false;
   let sawError = false;
   const startTime = Date.now();
+  let results = 0;
+  let emptyResults = 0;
+  let interims = 0;
+  let finals = 0;
 
   const dg = new WebSocket(DEEPGRAM_WS_URL, {
     headers: {
@@ -171,16 +175,29 @@ function createLiveProxy(
 
       if (msg.type !== "Results") return;
 
+      results += 1;
+
       const transcript = msg.channel?.alternatives?.[0]?.transcript?.trim() ?? "";
-      if (!transcript) return;
+      if (!transcript) {
+        emptyResults += 1;
+        if (emptyResults === 1) {
+          log.info(
+            { sessionId },
+            "Deepgram first empty transcript — mic audio was silent or unrecognisable",
+          );
+        }
+        return;
+      }
 
       if (msg.is_final || msg.speech_final) {
+        finals += 1;
         onTranscript({
           type: "transcript_final",
           text: transcript,
           latencyMs: Date.now() - startTime,
         });
       } else {
+        interims += 1;
         onTranscript({
           type: "transcript_interim",
           text: transcript,
@@ -203,7 +220,7 @@ function createLiveProxy(
   });
 
   dg.on("close", () => {
-    log.info({ sessionId }, "Deepgram WebSocket closed");
+    log.info({ results, emptyResults, interims, finals }, "Deepgram WebSocket closed");
     if (!closed && !sawError) {
       // Server dropped us mid-session — already counted if "error" fired.
       recordFailure("deepgram");

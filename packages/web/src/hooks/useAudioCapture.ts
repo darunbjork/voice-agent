@@ -62,6 +62,7 @@ export function useAudioCapture(
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const onChunkRef = useRef(onChunk);
   onChunkRef.current = onChunk;
+  const firstChunkLoggedRef = useRef(false);
 
   const teardown = useCallback(() => {
     processorRef.current?.disconnect();
@@ -93,6 +94,7 @@ export function useAudioCapture(
 
     setStatus("requesting_permission");
     setError(null);
+    firstChunkLoggedRef.current = false;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -152,6 +154,11 @@ export function useAudioCapture(
 
         if (truncated) {
           console.warn(`[useAudioCapture] chunk truncated to ${MAX_PCM_CHUNK_BYTES} bytes`);
+        }
+
+        if (!firstChunkLoggedRef.current) {
+          firstChunkLoggedRef.current = true;
+          console.info(`[useAudioCapture] first PCM chunk (${chunk.byteLength} bytes)`);
         }
 
         onChunkRef.current(chunk);
