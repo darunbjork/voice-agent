@@ -8,9 +8,11 @@ import { getPrisma, closePrisma } from "../utils/db.js";
 import { resetAllCircuits } from "../utils/circuit-breaker.js";
 
 const originalVoiceMock = env.VOICE_MOCK;
+const originalGeminiKey = env.GEMINI_API_KEY;
 
 function goLive(): void {
   env.VOICE_MOCK = false;
+  env.GEMINI_API_KEY = "test-gemini-key";
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -22,6 +24,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 afterEach(() => {
   env.VOICE_MOCK = originalVoiceMock;
+  env.GEMINI_API_KEY = originalGeminiKey;
   vi.unstubAllGlobals();
   resetAllCircuits();
 });
@@ -119,12 +122,17 @@ describe("translate tool (live mode, stubbed Gemini)", () => {
 
   it("translates through Gemini when live", async () => {
     goLive();
-    vi.stubGlobal("fetch", stubGemini("Hej världen"));
+    const fetchMock = stubGemini("Hej världen");
+    vi.stubGlobal("fetch", fetchMock);
 
     const r = await translateTool({
       userText: "Translate hello world in swedish",
       slots: {},
     });
+    // Prove the Gemini path ran — not the demo-dictionary fallback.
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).includes("generativelanguage")),
+    ).toBe(true);
     expect(r.card.translated).toBe("Hej världen");
     expect(r.replyHint).toBe("hello world in Swedish is Hej världen.");
   });
