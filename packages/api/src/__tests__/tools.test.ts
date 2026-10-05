@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { env } from "../env.js";
 import { weatherTool } from "../modules/agent/tools/weather.tool.js";
 import { reminderTool } from "../modules/agent/tools/reminder.tool.js";
 import { translateTool } from "../modules/agent/tools/translate.tool.js";
@@ -21,6 +22,22 @@ describe("tool handlers", () => {
   it("weather falls back to Stockholm when no slot", async () => {
     const r = await weatherTool({ userText: "weather?", slots: {} });
     expect(r.card.location).toBe("Stockholm");
+  });
+
+  it("fetches live Open-Meteo weather even when VOICE_MOCK=true", async () => {
+    expect(env.VOICE_MOCK).toBe(true);
+    const spy = vi.spyOn(globalThis, "fetch");
+    try {
+      const r = await weatherTool({
+        userText: "What is the weather in Berlin?",
+        slots: { location: "Berlin" },
+      });
+      expect(spy.mock.calls.some(([input]) => String(input).includes("open-meteo.com"))).toBe(true);
+      // The local stub answers Overcast; the old fixture always said Partly cloudy.
+      expect(r.card.desc).toBe("Overcast");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("reminder extracts note", async () => {

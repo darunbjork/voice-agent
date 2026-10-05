@@ -1,5 +1,4 @@
 import type { WeatherCard } from "@voice-agent/shared-types";
-import { env } from "../../../env.js";
 
 export type WeatherToolInput = {
   userText: string;
@@ -16,22 +15,6 @@ const FETCH_TIMEOUT_MS = 4000;
 export async function weatherTool(input: WeatherToolInput): Promise<WeatherToolResult> {
   const location = input.slots.location?.trim() || extractLocation(input.userText) || "Stockholm";
 
-  if (env.VOICE_MOCK) {
-    const card: WeatherCard = {
-      type: "weather",
-      icon: "☀️",
-      temp: "22°C",
-      desc: "Partly cloudy",
-      humidity: "55%",
-      wind: "12 km/h",
-      location,
-    };
-    return {
-      card,
-      replyHint: `It is ${card.temp} and ${card.desc.toLowerCase()} in ${location}.`,
-    };
-  }
-
   try {
     const geo = await geocode(location);
     if (!geo) {
@@ -46,11 +29,28 @@ export async function weatherTool(input: WeatherToolInput): Promise<WeatherToolR
       replyHint: `It is ${card.temp} and ${card.desc.toLowerCase()} in ${card.location}.`,
     };
   } catch {
+    const card = offlineCard(location);
     return {
-      card: unavailableCard(location),
-      replyHint: `I could not reach the weather service for ${location} right now.`,
+      card,
+      replyHint: `I could not reach the weather service for ${location} right now, so this is demo data: it is ${card.temp} and ${card.desc.toLowerCase()}.`,
     };
   }
+}
+
+/**
+ * Open-Meteo is free and unmetered, so weather never runs behind VOICE_MOCK.
+ * This fixture exists only for the case where the network call itself fails.
+ */
+function offlineCard(location: string): WeatherCard {
+  return {
+    type: "weather",
+    icon: "☀️",
+    temp: "22°C",
+    desc: "Partly cloudy (demo data)",
+    humidity: "55%",
+    wind: "12 km/h",
+    location,
+  };
 }
 
 function unavailableCard(location: string): WeatherCard {
