@@ -14,6 +14,10 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  DEEPGRAM_LIVE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
 
   DEEPGRAM_API_KEY: z.string().optional().default(""),
   ELEVENLABS_API_KEY: z.string().optional().default(""),
@@ -47,6 +51,11 @@ function loadEnv(): Env {
   if (parsed.data.NODE_ENV === "production") {
     if (parsed.data.VOICE_MOCK) {
       console.warn("[env] VOICE_MOCK=true in production — provider calls stay mocked");
+    }
+    if (parsed.data.DEEPGRAM_LIVE && !parsed.data.DEEPGRAM_API_KEY) {
+      console.warn(
+        "[env] DEEPGRAM_LIVE=true without DEEPGRAM_API_KEY — speech recognition will fail",
+      );
     }
     if (!parsed.data.CORS_ORIGINS || parsed.data.CORS_ORIGINS.length === 0) {
       console.warn("[env] CORS_ORIGINS empty — browser origins will be rejected");

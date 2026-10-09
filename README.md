@@ -137,6 +137,7 @@ pnpm format:check        # CI-equivalent
 - [`docs/security.md`](docs/security.md) — threat model and checklist
 - [`docs/deploy.md`](docs/deploy.md) — Fly + Vercel walkthrough
 - [`docs/demo.md`](docs/demo.md) — recruiter demo script
+- [`docs/mock-mode-tool-limitations.md`](docs/mock-mode-tool-limitations.md) — mock-mode behavior and tool limitations
 - [`docs/portfolio.md`](docs/portfolio.md) — project card + repo copy for darun.dev
 - [`docs/issues-and-solutions.md`](docs/issues-and-solutions.md) — defect log with stable IDs
 

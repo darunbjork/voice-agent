@@ -264,6 +264,14 @@ describe("parseSchedule", () => {
     expect(d?.getHours()).toBe(17);
   });
 
+  it("schedules a weekday for its next occurrence at 09:00", () => {
+    const d = parseSchedule("Monday", now);
+    expect(d).not.toBeNull();
+    expect(d?.getDay()).toBe(1);
+    expect(d?.getDate()).toBe(5);
+    expect(d?.getHours()).toBe(9);
+  });
+
   it("parses 'today at 09:30'", () => {
     const d = parseSchedule("today at 09:30", now);
     expect(d).not.toBeNull();
