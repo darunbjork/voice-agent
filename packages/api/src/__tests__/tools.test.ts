@@ -75,7 +75,28 @@ describe("tool handlers", () => {
     expect(fast?.intent).toBe("translate");
     const r = await translateTool({ userText: text, slots: fast?.slots ?? {} });
     expect(r.card.original.toLowerCase()).toBe("high");
+    expect(r.card.translated).toBe("hög");
     expect(r.replyHint.toLowerCase()).toContain("high");
+  });
+
+  it("translates the reported STT transcript in demo mode", async () => {
+    const text = "What dose High mean in Swedish?";
+    const fast = classifyByKeywords(text);
+    expect(fast?.intent).toBe("translate");
+    const r = await translateTool({ userText: text, slots: fast?.slots ?? {} });
+    expect(r.card.original).toBe("High");
+    expect(r.card.translated).toBe("hög");
+    expect(r.replyHint).toBe("High in Swedish is hög.");
+  });
+
+  it("translates a phrase after correcting a likely target-language typo", async () => {
+    const text = "What dose sleep mean in Sweidhs?";
+    const fast = classifyByKeywords(text);
+    expect(fast?.intent).toBe("translate");
+    const r = await translateTool({ userText: text, slots: fast?.slots ?? {} });
+    expect(r.card.original).toBe("sleep");
+    expect(r.card.translated).toBe("sova");
+    expect(r.replyHint).toBe("sleep in Swedish is sova.");
   });
 
   it("translate extracts the original from meaning questions without slots", async () => {
@@ -109,6 +130,22 @@ describe("tool handlers", () => {
     const r = await helpTool();
     expect(r.card.type).toBe("help");
     expect(r.card.commands.length).toBeGreaterThanOrEqual(4);
+    expect(r.replyHint).toContain("Demo mode is on");
+    expect(r.replyHint).toContain("sample transcript");
+    expect(r.card.commands.find((command) => command.name === "reminder")?.description).toContain(
+      "not saved",
+    );
+    expect(r.card.commands.find((command) => command.name === "summarize")?.description).toContain(
+      "basic",
+    );
+  });
+
+  it("does not claim a mock reminder was saved", async () => {
+    const r = await reminderTool({
+      userText: "Remind me to follow up with the recruiter tomorrow",
+      slots: {},
+    });
+    expect(r.replyHint).toContain("this reminder was not saved");
   });
 
   it("registry runs the correct tool", async () => {
@@ -149,6 +186,16 @@ describe("tool handlers", () => {
     const r = await reminderTool({ userText: text, slots: fast?.slots ?? {} });
     expect(r.card.note).toBe("call Alex");
     expect(r.card.time).toBe("at 5pm");
+  });
+
+  it("reminder extracts the task and weekday when the date comes first", async () => {
+    const text = "Remind me on Monday, I have a meeting";
+    const fast = classifyByKeywords(text);
+    expect(fast?.intent).toBe("reminder");
+    const r = await reminderTool({ userText: text, slots: fast?.slots ?? {} });
+    expect(r.card.note).toBe("I have a meeting");
+    expect(r.card.time).toBe("Monday");
+    expect(r.replyHint).toContain("remind you Monday that I have a meeting");
   });
 
   it("summarize strips the command prefix from points and source", async () => {

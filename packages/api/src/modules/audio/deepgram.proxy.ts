@@ -45,7 +45,7 @@ function buildDeepgramProxy(
   log: FastifyBaseLogger,
   sessionId: string,
 ): DeepgramProxy {
-  if (env.VOICE_MOCK) {
+  if (env.VOICE_MOCK && !env.DEEPGRAM_LIVE) {
     return createMockProxy(onTranscript, log, sessionId);
   }
 
@@ -139,7 +139,7 @@ function createLiveProxy(
   sessionId: string,
 ): DeepgramProxy {
   if (!env.DEEPGRAM_API_KEY) {
-    throw new Error("DEEPGRAM_API_KEY is required when VOICE_MOCK=false");
+    throw new Error("DEEPGRAM_API_KEY is required when live speech recognition is enabled");
   }
 
   let closed = false;

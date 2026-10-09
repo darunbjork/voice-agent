@@ -15,6 +15,13 @@ describe("classifyByKeywords", () => {
     expect(r?.slots.note?.toLowerCase()).toContain("call");
   });
 
+  it("extracts a task and weekday from a reminder phrased with the date first", () => {
+    const r = classifyByKeywords("Remind me on Monday, I have a meeting");
+    expect(r?.intent).toBe("reminder");
+    expect(r?.slots.note).toBe("I have a meeting");
+    expect(r?.slots.time).toBe("Monday");
+  });
+
   it("detects translate with original and toLang slots", () => {
     const r = classifyByKeywords("Translate hello world in swedish");
     expect(r?.intent).toBe("translate");
@@ -64,6 +71,13 @@ describe("classifyByKeywords", () => {
     expect(r?.intent).toBe("translate");
     expect(r?.slots.original?.toLowerCase()).toBe("well-done");
     expect(r?.slots.toLang).toBe("german");
+  });
+
+  it("corrects a likely speech-to-text typo in the target language", () => {
+    const r = classifyByKeywords("What dose sleep mean in Sweidhs?");
+    expect(r?.intent).toBe("translate");
+    expect(r?.slots.original).toBe("sleep");
+    expect(r?.slots.toLang).toBe("swedish");
   });
 
   it("still detects weather in meaning-free questions", () => {

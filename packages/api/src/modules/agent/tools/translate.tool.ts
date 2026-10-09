@@ -16,6 +16,8 @@ const DEMO_DICTIONARY: Record<string, Record<string, string>> = {
   sv: {
     hello: "hej",
     "hello world": "hej världen",
+    high: "hög",
+    sleep: "sova",
     goodbye: "hej då",
     thanks: "tack",
     "good morning": "god morgon",
@@ -77,7 +79,9 @@ export async function translateTool(input: TranslateToolInput): Promise<Translat
     card,
     replyHint: translated
       ? `${original} in ${display} is ${translated}.`
-      : `I do not have a translation for "${original}" to ${display} yet.`,
+      : env.VOICE_MOCK
+        ? `I do not have a translation for "${original}" to ${display} in the demo dictionary yet.`
+        : `I do not have a translation for "${original}" to ${display} yet.`,
   };
 }
 

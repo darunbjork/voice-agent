@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { FastifyBaseLogger } from "fastify";
 import type { ServerAudioMessage } from "@voice-agent/shared-types";
+import { env } from "../env.js";
 import { createDeepgramProxy } from "../modules/audio/deepgram.proxy.js";
+
+const originalVoiceMock = env.VOICE_MOCK;
+const originalDeepgramLive = env.DEEPGRAM_LIVE;
+const originalDeepgramApiKey = env.DEEPGRAM_API_KEY;
 
 const silentLogger = {
   info: () => undefined,
@@ -23,6 +28,8 @@ describe("deepgram proxy (VOICE_MOCK=true)", () => {
   };
 
   beforeEach(() => {
+    env.VOICE_MOCK = true;
+    env.DEEPGRAM_LIVE = false;
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     finals = [];
@@ -38,6 +45,9 @@ describe("deepgram proxy (VOICE_MOCK=true)", () => {
   });
 
   afterEach(() => {
+    env.VOICE_MOCK = originalVoiceMock;
+    env.DEEPGRAM_LIVE = originalDeepgramLive;
+    env.DEEPGRAM_API_KEY = originalDeepgramApiKey;
     vi.useRealTimers();
   });
 
@@ -70,5 +80,13 @@ describe("deepgram proxy (VOICE_MOCK=true)", () => {
     sendBurst(8);
     expect(finals).toHaveLength(0);
     expect(proxy.ready).toBe(false);
+  });
+
+  it("selects live transcription when explicitly enabled in mock mode", () => {
+    env.DEEPGRAM_LIVE = true;
+    env.DEEPGRAM_API_KEY = "";
+    expect(() => createDeepgramProxy(() => undefined, silentLogger, "sess_live_stt")).toThrow(
+      "DEEPGRAM_API_KEY is required when live speech recognition is enabled",
+    );
   });
 });

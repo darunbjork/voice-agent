@@ -12,4 +12,5 @@ packages/api/.env
 # Markdown stays local — never committed, never rendered on GitHub
 *.md
 !/README.md
+!/docs/mock-mode-tool-limitations.md
 RULES.md
