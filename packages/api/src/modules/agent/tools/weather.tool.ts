@@ -1,5 +1,14 @@
 import type { WeatherCard } from "@voice-agent/shared-types";
-import { CAPITALS, cleanLocation, extractWeatherLocation } from "../location.js";
+import {
+  CAPITALS,
+  MAX_FORECAST_DAYS,
+  cleanLocation,
+  extractWeatherLocation,
+  parseForecastDay,
+  regionName,
+  splitCountry,
+} from "../location.js";
+import { ASSISTANT_TIME_ZONE } from "../gemini.tools.js";
 
 export type WeatherToolInput = {
   userText: string;
@@ -14,18 +23,69 @@ export type WeatherToolResult = {
 
 const FETCH_TIMEOUT_MS = 4000;
 
-export async function weatherTool(input: WeatherToolInput): Promise<WeatherToolResult> {
+const capitalise = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
+
+/** Weekday (0 = Sunday) in the assistant's time zone. */
+function weekdayNow(now: Date): number {
+  const name = new Intl.DateTimeFormat("en-US", {
+    timeZone: ASSISTANT_TIME_ZONE,
+    weekday: "long",
+  }).format(now);
+  return ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].indexOf(
+    name,
+  );
+}
+
+export async function weatherTool(
+  input: WeatherToolInput,
+  now: Date = new Date(),
+): Promise<WeatherToolResult> {
   const location =
     cleanLocation(input.slots.location ?? "") ||
     extractWeatherLocation(input.userText) ||
     "Stockholm";
 
+  // Continents and regions have no single weather — and the geocoder matches
+  // them to villages elsewhere ("Middle East" → a hamlet in the US).
+  const region = regionName(location);
+  if (region) {
+    return {
+      card: null,
+      replyHint: `${capitalise(region)} is a big area. Which city in ${region} would you like the weather for?`,
+    };
+  }
+
+  const day = parseForecastDay(input.userText, weekdayNow(now));
+  if (day.kind === "unsupported") {
+    return {
+      card: null,
+      replyHint: `I can only give the current weather or a forecast for the next ${MAX_FORECAST_DAYS} days, not ${day.phrase}. Which day would you like?`,
+    };
+  }
+
+  const { place, countryCode } = splitCountry(location);
+
   try {
-    let geo = await geocode(location);
+    let geo = await geocode(place, countryCode);
     if (!geo) {
       return {
         card: unavailableCard(location),
-        replyHint: `I could not find a place called ${location}.`,
+        replyHint: countryCode
+          ? `I could not find a place called ${place} in that country.`
+          : `I could not find a place called ${location}.`,
+      };
+    }
+    // Never accept a match in a different country than the one the user named.
+    if (countryCode && geo.countryCode !== countryCode) {
+      return {
+        card: null,
+        replyHint: `I could not find ${place} in that country. Which city did you mean?`,
+      };
+    }
+    if (geo.isRegion) {
+      return {
+        card: null,
+        replyHint: `${geo.name} is a big area. Which city there would you like the weather for?`,
       };
     }
 
@@ -42,6 +102,15 @@ export async function weatherTool(input: WeatherToolInput): Promise<WeatherToolR
       }
       note = `For ${geo.name} I am using the capital, ${capitalGeo.name}. `;
       geo = capitalGeo;
+    }
+
+    if (day.kind === "day") {
+      const { card, precipitation, summary } = await fetchDailyForecast(geo, day.offset, day.label);
+      const rain = precipitation !== null ? `, ${precipitation}% chance of rain` : "";
+      return {
+        card,
+        replyHint: `${note}${capitalise(day.label)} in ${card.location}: ${summary.toLowerCase()}, ${card.temp}${rain}.`,
+      };
     }
 
     const card = await fetchCurrentWeather(geo);
@@ -92,6 +161,8 @@ type GeocodeResult = {
   countryCode: string;
   /** GeoNames PCL* feature (a country, not a city). */
   isCountry: boolean;
+  /** GeoNames continent / region / area feature. */
+  isRegion: boolean;
   latitude: number;
   longitude: number;
 };
@@ -120,6 +191,7 @@ async function geocode(query: string, countryCode?: string): Promise<GeocodeResu
     country: hit.country ?? "",
     countryCode: (hit.country_code ?? "").toUpperCase(),
     isCountry: (hit.feature_code ?? "").startsWith("PCL"),
+    isRegion: ["CONT", "RGN", "RGNE", "AREA", "ZN"].includes(hit.feature_code ?? ""),
     latitude: hit.latitude,
     longitude: hit.longitude,
   };
@@ -152,6 +224,56 @@ async function fetchCurrentWeather(geo: GeocodeResult): Promise<WeatherCard> {
     humidity: `${Math.round(current.relative_humidity_2m)}%`,
     wind: `${Math.round(current.wind_speed_10m)} km/h`,
     location: geo.country ? `${geo.name}, ${geo.country}` : geo.name,
+  };
+}
+
+/** Daily forecast for `offset` days from today (0–6), in the place's own time zone. */
+async function fetchDailyForecast(
+  geo: GeocodeResult,
+  offset: number,
+  label: string,
+): Promise<{ card: WeatherCard; precipitation: number | null; summary: string }> {
+  const url =
+    "https://api.open-meteo.com/v1/forecast" +
+    `?latitude=${geo.latitude}&longitude=${geo.longitude}` +
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max," +
+    `wind_speed_10m_max,relative_humidity_2m_mean&timezone=auto&forecast_days=${MAX_FORECAST_DAYS}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  if (!res.ok) throw new Error(`Open-Meteo forecast ${res.status}`);
+  const data = (await res.json()) as {
+    daily?: {
+      weather_code?: number[];
+      temperature_2m_max?: number[];
+      temperature_2m_min?: number[];
+      precipitation_probability_max?: Array<number | null>;
+      wind_speed_10m_max?: number[];
+      relative_humidity_2m_mean?: Array<number | null>;
+    };
+  };
+  const d = data.daily;
+  const code = d?.weather_code?.[offset];
+  const max = d?.temperature_2m_max?.[offset];
+  const min = d?.temperature_2m_min?.[offset];
+  if (code === undefined || max === undefined || min === undefined) {
+    throw new Error("Open-Meteo response missing daily data");
+  }
+  const { icon, desc } = mapWeatherCode(code);
+  const humidity = d?.relative_humidity_2m_mean?.[offset];
+  const wind = d?.wind_speed_10m_max?.[offset];
+  const lo = Math.round(min);
+  const hi = Math.round(max);
+  return {
+    card: {
+      type: "weather",
+      icon,
+      temp: lo === hi ? `${hi}°C` : `${lo} to ${hi}°C`,
+      desc: `${desc} (${label})`,
+      humidity: humidity != null ? `${Math.round(humidity)}%` : "—",
+      wind: wind !== undefined ? `up to ${Math.round(wind)} km/h` : "—",
+      location: geo.country ? `${geo.name}, ${geo.country}` : geo.name,
+    },
+    precipitation: d?.precipitation_probability_max?.[offset] ?? null,
+    summary: desc,
   };
 }
 
