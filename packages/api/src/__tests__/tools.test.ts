@@ -55,8 +55,8 @@ describe("tool handlers", () => {
       userText: "Translate hello world in swedish",
       slots: { original: "hello world", toLang: "sv" },
     });
-    expect(r.card.type).toBe("translate");
-    expect(r.card.translated.toLowerCase()).toContain("hej");
+    expect(r.card!.type).toBe("translate");
+    expect(r.card!.translated.toLowerCase()).toContain("hej");
     expect(r.replyHint).toContain("Swedish");
   });
 
@@ -65,7 +65,7 @@ describe("tool handlers", () => {
       userText: "Translate quantum chromodynamics in swedish",
       slots: { original: "quantum chromodynamics", toLang: "sv" },
     });
-    expect(r.card.translated).not.toMatch(/^\[/);
+    expect(r.card!.translated).not.toMatch(/^\[/);
     expect(r.replyHint).toContain("do not have a translation");
   });
 
@@ -74,8 +74,8 @@ describe("tool handlers", () => {
     const fast = classifyByKeywords(text);
     expect(fast?.intent).toBe("translate");
     const r = await translateTool({ userText: text, slots: fast?.slots ?? {} });
-    expect(r.card.original.toLowerCase()).toBe("high");
-    expect(r.card.translated).toBe("hög");
+    expect(r.card!.original.toLowerCase()).toBe("high");
+    expect(r.card!.translated).toBe("hög");
     expect(r.replyHint.toLowerCase()).toContain("high");
   });
 
@@ -84,8 +84,8 @@ describe("tool handlers", () => {
     const fast = classifyByKeywords(text);
     expect(fast?.intent).toBe("translate");
     const r = await translateTool({ userText: text, slots: fast?.slots ?? {} });
-    expect(r.card.original).toBe("High");
-    expect(r.card.translated).toBe("hög");
+    expect(r.card!.original).toBe("High");
+    expect(r.card!.translated).toBe("hög");
     expect(r.replyHint).toBe("High in Swedish is hög.");
   });
 
@@ -94,8 +94,8 @@ describe("tool handlers", () => {
     const fast = classifyByKeywords(text);
     expect(fast?.intent).toBe("translate");
     const r = await translateTool({ userText: text, slots: fast?.slots ?? {} });
-    expect(r.card.original).toBe("sleep");
-    expect(r.card.translated).toBe("sova");
+    expect(r.card!.original).toBe("sleep");
+    expect(r.card!.translated).toBe("sova");
     expect(r.replyHint).toBe("sleep in Swedish is sova.");
   });
 
@@ -104,8 +104,8 @@ describe("tool handlers", () => {
       userText: "What dose good-bye mean in Swedish?",
       slots: {},
     });
-    expect(r.card.original.toLowerCase()).toBe("good-bye");
-    expect(r.card.original.toLowerCase()).not.toBe("hello");
+    expect(r.card!.original.toLowerCase()).toBe("good-bye");
+    expect(r.card!.original.toLowerCase()).not.toBe("hello");
   });
 
   it("translate extracts the original when 'what' is missing from the transcript", async () => {
@@ -113,8 +113,8 @@ describe("tool handlers", () => {
       userText: "Does the word high mean in Swedish?",
       slots: {},
     });
-    expect(r.card.original.toLowerCase()).toBe("high");
-    expect(r.card.original.toLowerCase()).not.toBe("hello");
+    expect(r.card!.original.toLowerCase()).toBe("high");
+    expect(r.card!.original.toLowerCase()).not.toBe("hello");
   });
 
   it("summarize returns at least 2 points for multi-sentence input", async () => {

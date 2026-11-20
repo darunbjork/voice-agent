@@ -135,7 +135,7 @@ describe("translate tool (live mode, stubbed Gemini)", () => {
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).includes("generativelanguage")),
     ).toBe(true);
-    expect(r.card.translated).toBe("Hej världen");
+    expect(r.card!.translated).toBe("Hej världen");
     expect(r.replyHint).toBe("hello world in Swedish is Hej världen.");
   });
 
@@ -152,7 +152,7 @@ describe("translate tool (live mode, stubbed Gemini)", () => {
       userText: "Translate hello world in swedish",
       slots: {},
     });
-    expect(r.card.translated).toBe("hej världen");
+    expect(r.card!.translated).toBe("hej världen");
     expect(r.replyHint).toBe("hello world in Swedish is hej världen.");
   });
 

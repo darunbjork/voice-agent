@@ -1,6 +1,12 @@
 import type { TranslateCard } from "@voice-agent/shared-types";
 import { env } from "../../../env.js";
 import { generateToolText } from "../gemini.tools.js";
+import {
+  TRANSLATE_CLARIFY_REPLY,
+  cleanPhrase,
+  parseTranslateRequest,
+  resolveLanguage,
+} from "../translate-request.js";
 
 export type TranslateToolInput = {
   userText: string;
@@ -8,7 +14,8 @@ export type TranslateToolInput = {
 };
 
 export type TranslateToolResult = {
-  card: TranslateCard;
+  /** Null when we had to ask what to translate or into which language. */
+  card: TranslateCard | null;
   replyHint: string;
 };
 
@@ -42,22 +49,22 @@ const DEMO_DICTIONARY: Record<string, Record<string, string>> = {
   },
 };
 
-const LANG_DISPLAY: Record<string, string> = {
-  sv: "Swedish",
-  es: "Spanish",
-  fr: "French",
-  de: "German",
-};
-
 const TRANSLATE_SYSTEM_PROMPT =
   "You are a translation engine. Reply with only the translated text. " +
   "No quotes, no explanations, no romanization.";
 
 export async function translateTool(input: TranslateToolInput): Promise<TranslateToolResult> {
-  const original = input.slots.original?.trim() || extractOriginal(input.userText) || "hello";
-  const toLang = normaliseLang(input.slots.toLang?.trim() || extractToLang(input.userText) || "sv");
+  // Never substitute a default phrase or language: ask instead.
+  const parsed = parseTranslateRequest(input.userText);
+  const original = cleanPhrase(input.slots.original ?? "") || parsed.original;
+  const language = resolveLanguage(input.slots.toLang ?? "") ?? parsed.language;
+  if (!original || !language) {
+    return { card: null, replyHint: TRANSLATE_CLARIFY_REPLY };
+  }
+
+  const toLang = language.code;
   const fromLang = "en";
-  const display = LANG_DISPLAY[toLang] ?? toLang;
+  const display = language.name.charAt(0).toUpperCase() + language.name.slice(1);
 
   const dictHit = DEMO_DICTIONARY[toLang]?.[original.toLowerCase()] ?? null;
 
@@ -105,36 +112,4 @@ function stripWrappingQuotes(text: string): string {
   const trimmed = text.trim();
   const m = trimmed.match(/^["'“”‘’]+([\s\S]*?)["'“”‘’]+$/);
   return (m?.[1] ?? trimmed).trim();
-}
-
-function extractOriginal(text: string): string | null {
-  const say = text.match(/\b(?:translate|say)\s+["']?(.+?)["']?\s+in\s+\w+/i);
-  if (say?.[1]) return say[1].trim();
-  const strip = (s: string): string => s.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
-  const mean = text.match(
-    /\b(?:what(?:'s|\s+)?)?(?:is|dose|does|do)\s+(?:the\s+)?(?:word\s+)?(.+?)\s+means?\s+in\s+\w+/i,
-  );
-  if (mean?.[1]) return strip(mean[1]) || null;
-  const meanOf = text.match(
-    /\b(?:what(?:'s|\s+)?)?is\s+(?:the\s+)?meaning\s+of\s+(.+?)\s+in\s+\w+/i,
-  );
-  if (meanOf?.[1]) return strip(meanOf[1]) || null;
-  return null;
-}
-
-function extractToLang(text: string): string | null {
-  const m = text.match(/\bin\s+(swedish|spanish|french|german|sv|es|fr|de)\b/i);
-  if (!m?.[1]) return null;
-  return normaliseLang(m[1]);
-}
-
-function normaliseLang(raw: string): string {
-  const lower = raw.toLowerCase();
-  const map: Record<string, string> = {
-    swedish: "sv",
-    spanish: "es",
-    french: "fr",
-    german: "de",
-  };
-  return map[lower] ?? lower;
 }
