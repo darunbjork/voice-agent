@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyPluginOptions } from "fastify";
 import { env } from "../../env.js";
 import { getDailyUsage } from "../../utils/usage-tracker.js";
 import { getAllCircuitSnapshots, type CircuitSnapshot } from "../../utils/circuit-breaker.js";
-import { DAILY_MAX_TOKENS } from "../../utils/token-budget.js";
+import { getDailyLimits } from "../../utils/token-budget.js";
 
 const healthResponseSchema = {
   type: "object",
@@ -107,7 +107,7 @@ export async function healthRoutes(
         redis,
         voiceMock: env.VOICE_MOCK,
         dailyTokens: usage.tokens,
-        dailyTokenLimit: DAILY_MAX_TOKENS,
+        dailyTokenLimit: getDailyLimits().tokens,
         circuits: getAllCircuitSnapshots(),
         timestamp: new Date().toISOString(),
         correlationId: request.correlationId,

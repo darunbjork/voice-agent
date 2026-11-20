@@ -14,6 +14,8 @@ import {
 } from "../session/session.service.js";
 import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared-types";
 import { isTurnAborted } from "../../utils/turn-abort.js";
+import { checkDailyTokenBudget } from "../../middleware/cost.guard.js";
+import { getDailyUsage } from "../../utils/usage-tracker.js";
 
 const MAX_PCM_CHUNK_BYTES = 4096;
 
@@ -70,6 +72,15 @@ export async function audioRoutes(
       }
 
       if (signal.aborted) return;
+
+      // Same daily Gemini ceiling as the HTTP route's costGuard.
+      const exceeded = await checkDailyTokenBudget(msg.text);
+      if (signal.aborted) return;
+      if (exceeded) {
+        log.warn({ limit: exceeded.error.limit }, "Daily token budget reached — turn skipped");
+        sendSafe({ type: "error", code: "budget_exceeded", message: exceeded.error.message });
+        return;
+      }
 
       let reply;
       let pipelineMs: number;
@@ -153,6 +164,13 @@ export async function audioRoutes(
         log.error({ err }, "Failed to create DB session — using ephemeral");
       }
 
+      let sttSecondsUsedToday = 0;
+      try {
+        sttSecondsUsedToday = (await getDailyUsage()).sttSeconds;
+      } catch (err) {
+        log.warn({ err }, "Could not read STT usage — assuming none");
+      }
+
       if (socket.readyState !== socket.OPEN) return;
 
       try {
@@ -165,6 +183,7 @@ export async function audioRoutes(
           log,
           dbSessionId,
           sessionAbort.signal,
+          { sttSecondsUsedToday },
         );
       } catch (err) {
         log.error({ err }, "Failed to send session_id or create proxy");

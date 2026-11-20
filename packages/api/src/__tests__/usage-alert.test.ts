@@ -6,7 +6,9 @@ import {
   hasAlertedToday,
   isApproachingDailyLimit,
 } from "../utils/usage-tracker.js";
-import { DAILY_MAX_TOKENS } from "../utils/token-budget.js";
+import { getDailyLimits } from "../utils/token-budget.js";
+
+const DAILY_MAX_TOKENS = getDailyLimits().tokens;
 
 describe("usage tracker", () => {
   beforeEach(() => {

@@ -3,7 +3,11 @@ import { env } from "../../env.js";
 import { assertWithinBudget, estimateTokens } from "../../utils/token-budget.js";
 import { assertCircuitClosed, recordSuccess, recordFailure } from "../../utils/circuit-breaker.js";
 
-export const GEMINI_MODEL_ID = "gemini-flash-latest";
+/**
+ * Pinned to flash-lite-preview: `gemini-flash-latest` timed out at 45s on the
+ * free tier while flash-lite-preview answers in ~1.6s. Override with GEMINI_MODEL.
+ */
+export const GEMINI_MODEL_ID = env.GEMINI_MODEL;
 
 const REQUEST_TIMEOUT_MS = 8_000;
 

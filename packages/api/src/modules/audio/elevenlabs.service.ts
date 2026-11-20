@@ -1,14 +1,18 @@
 import type { FastifyBaseLogger } from "fastify";
 import { env } from "../../env.js";
 import { mockTtsChunk } from "../../utils/voice-mock.js";
-import { assertWithinTtsBudget } from "../../utils/token-budget.js";
-import { incrementUsage } from "../../utils/usage-tracker.js";
+import {
+  assertWithinTtsBudget,
+  getDailyLimits,
+  isBudgetExhaustedStatus,
+  isTtsDailyBudgetExhausted,
+} from "../../utils/token-budget.js";
+import { getDailyUsage, incrementUsage } from "../../utils/usage-tracker.js";
 import {
   assertCircuitClosed,
   recordSuccess,
   recordFailure,
   CircuitOpenError,
-  type ProviderName,
 } from "../../utils/circuit-breaker.js";
 import type { ServerAudioMessage } from "@voice-agent/shared-types";
 
@@ -24,6 +28,44 @@ const OUTPUT_FORMAT = "pcm_16000";
 const DEEPGRAM_URL =
   "https://api.deepgram.com/v1/speak" +
   "?model=aura-asteria-en&encoding=linear16&sample_rate=16000&container=none";
+
+/** A provider said "out of credits / rate-limited" — not a provider fault. */
+class ProviderBudgetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderBudgetError";
+  }
+}
+
+/**
+ * ElevenLabs reports exhausted credits as 401 `quota_exceeded`, and plan or
+ * rate problems as 402/429. All of these mean "budget exhausted".
+ */
+export function isElevenLabsQuotaError(status: number, body: string): boolean {
+  return isBudgetExhaustedStatus(status) || /quota_exceeded/i.test(body);
+}
+
+/**
+ * Reserves `chars` of today's ElevenLabs character budget before the request
+ * is sent, so concurrent replies cannot overshoot the cap. Returns false (and
+ * leaves usage unchanged) when the reply would not fit.
+ */
+async function reserveElevenLabsChars(chars: number): Promise<boolean> {
+  const before = await getDailyUsage();
+  if (isTtsDailyBudgetExhausted(before.ttsChars, chars)) return false;
+  const after = await incrementUsage({ ttsChars: chars });
+  if (after.ttsChars > getDailyLimits().ttsChars) {
+    await incrementUsage({ ttsChars: -chars });
+    return false;
+  }
+  return true;
+}
+
+async function releaseElevenLabsChars(chars: number, log: FastifyBaseLogger): Promise<void> {
+  await incrementUsage({ ttsChars: -chars }).catch((err: unknown) => {
+    log.warn({ err }, "usage refund failed");
+  });
+}
 
 export function streamTts(
   text: string,
@@ -137,11 +179,10 @@ function streamLiveTts(
 
   log.info({ sessionId, textLen: text.length, voiceId }, "Live TTS start");
 
+  // ElevenLabs characters are counted by the up-front reservation; Aura
+  // output does not consume the ElevenLabs budget.
   const emitDone = (): void => {
     onChunk({ type: "tts_done" });
-    void incrementUsage({ ttsChars: text.length }).catch((err) => {
-      log.warn({ err, sessionId }, "usage increment failed");
-    });
   };
 
   // Pre-flight circuit check for ElevenLabs. Without a fallback this
@@ -161,7 +202,10 @@ function streamLiveTts(
     throw new Error("ELEVENLABS_API_KEY is required when VOICE_MOCK=false");
   }
 
-  type Attempt = { ok: true } | { ok: false; code: string; message: string };
+  type Attempt =
+    { ok: true } | { ok: false; code: string; message: string; budgetExhausted: boolean };
+
+  let elevenChunks = 0;
 
   const pushChunk = (value: Uint8Array<ArrayBuffer>): void => {
     const audio = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
@@ -185,14 +229,22 @@ function streamLiveTts(
 
     if (!res.ok || !res.body) {
       const errText = await res.text().catch(() => res.statusText);
-      return { ok: false, code: "tts_http_error", message: `ElevenLabs ${res.status}: ${errText}` };
+      return {
+        ok: false,
+        code: "tts_http_error",
+        message: `ElevenLabs ${res.status}: ${errText}`,
+        budgetExhausted: isElevenLabsQuotaError(res.status, errText),
+      };
     }
 
     const reader = res.body.getReader();
     while (!cancelled) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (value && value.byteLength > 0) pushChunk(value);
+      if (value && value.byteLength > 0) {
+        elevenChunks += 1;
+        pushChunk(value);
+      }
     }
     return { ok: true };
   };
@@ -210,7 +262,10 @@ function streamLiveTts(
 
     if (!res.ok || !res.body) {
       const errText = await res.text().catch(() => res.statusText);
-      throw new Error(`Deepgram ${res.status}: ${errText}`);
+      const message = `Deepgram ${res.status}: ${errText}`;
+      throw isBudgetExhaustedStatus(res.status)
+        ? new ProviderBudgetError(message)
+        : new Error(message);
     }
 
     const reader = res.body.getReader();
@@ -221,39 +276,79 @@ function streamLiveTts(
     }
   };
 
+  const budgetExhaustedError = (message: string): void => {
+    onChunk({ type: "error", code: "tts_budget_exhausted", message });
+  };
+
   void (async () => {
-    let activeProvider: ProviderName = elevenCircuitOk ? "elevenlabs" : "deepgram";
-
     if (elevenCircuitOk) {
-      let attempt: Attempt;
+      let reserved: boolean;
       try {
-        attempt = await attemptElevenLabs();
+        reserved = await reserveElevenLabsChars(text.length);
       } catch (err) {
-        attempt = {
-          ok: false,
-          code: "tts_stream_error",
-          message: err instanceof Error ? err.message : "ElevenLabs request failed",
-        };
+        // Cannot prove the reply fits the cap — do not spend ElevenLabs credits.
+        log.warn({ err, sessionId }, "TTS usage reservation failed — skipping ElevenLabs");
+        reserved = false;
       }
-      if (cancelled) return;
-
-      if (attempt.ok) {
-        recordSuccess("elevenlabs");
-        emitDone();
-        log.info({ sessionId, chunks: sequence }, "Live TTS done (ElevenLabs)");
+      if (cancelled) {
+        if (reserved) await releaseElevenLabsChars(text.length, log);
         return;
       }
 
-      recordFailure("elevenlabs");
-      if (!canFallback) {
-        onChunk({ type: "error", code: attempt.code, message: attempt.message });
-        return;
+      if (!reserved) {
+        log.info(
+          { sessionId, dailyMaxTtsChars: getDailyLimits().ttsChars },
+          "ElevenLabs daily character budget reached — routing to Deepgram Aura",
+        );
+        if (!canFallback) {
+          budgetExhaustedError("Daily ElevenLabs character budget reached.");
+          return;
+        }
+      } else {
+        let attempt: Attempt;
+        try {
+          attempt = await attemptElevenLabs();
+        } catch (err) {
+          attempt = {
+            ok: false,
+            code: "tts_stream_error",
+            message: err instanceof Error ? err.message : "ElevenLabs request failed",
+            budgetExhausted: false,
+          };
+        }
+
+        if (attempt.ok) {
+          if (cancelled) return;
+          recordSuccess("elevenlabs");
+          emitDone();
+          log.info({ sessionId, chunks: sequence }, "Live TTS done (ElevenLabs)");
+          return;
+        }
+
+        // Nothing was synthesised, so nothing was billed — give the chars back.
+        if (elevenChunks === 0) await releaseElevenLabsChars(text.length, log);
+        if (cancelled) return;
+
+        if (attempt.budgetExhausted) {
+          // Out of credits / rate-limited is not a provider fault: no breaker count.
+          log.warn({ sessionId, reason: attempt.message }, "ElevenLabs budget exhausted");
+        } else {
+          recordFailure("elevenlabs");
+        }
+
+        if (!canFallback) {
+          onChunk({
+            type: "error",
+            code: attempt.budgetExhausted ? "tts_budget_exhausted" : attempt.code,
+            message: attempt.message,
+          });
+          return;
+        }
+        log.warn(
+          { sessionId, reason: attempt.message },
+          "ElevenLabs failed — falling back to Deepgram Aura",
+        );
       }
-      log.warn(
-        { sessionId, reason: attempt.message },
-        "ElevenLabs failed — falling back to Deepgram Aura",
-      );
-      activeProvider = "deepgram";
     } else {
       log.info({ sessionId }, "Using Deepgram Aura TTS (ElevenLabs unavailable)");
     }
@@ -266,8 +361,13 @@ function streamLiveTts(
       log.info({ sessionId, chunks: sequence }, "Live TTS done (Deepgram Aura)");
     } catch (err) {
       if (cancelled) return;
-      recordFailure(activeProvider);
-      log.error({ err, sessionId, provider: activeProvider }, "TTS failed");
+      if (err instanceof ProviderBudgetError) {
+        log.warn({ sessionId, reason: err.message }, "Deepgram Aura budget exhausted");
+        budgetExhaustedError(err.message);
+        return;
+      }
+      recordFailure("deepgram");
+      log.error({ err, sessionId, provider: "deepgram" }, "TTS failed");
       onChunk({
         type: "error",
         code: "tts_stream_error",

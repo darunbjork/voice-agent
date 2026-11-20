@@ -81,7 +81,7 @@ describe("streamTts provider fallback (live mode, stubbed providers)", () => {
     expect(stream.cancelled).toBe(false);
   });
 
-  it("emits the original ElevenLabs error when no Deepgram key is configured", async () => {
+  it("reports budget exhaustion with the ElevenLabs 402 detail when no Deepgram key is configured", async () => {
     goLive("");
     const urls: string[] = [];
     vi.stubGlobal(
@@ -102,7 +102,7 @@ describe("streamTts provider fallback (live mode, stubbed providers)", () => {
     const err = chunks.find((c) => c.type === "error");
     expect(err).toBeDefined();
     if (err?.type === "error") {
-      expect(err.code).toBe("tts_http_error");
+      expect(err.code).toBe("tts_budget_exhausted");
       expect(err.message).toContain("ElevenLabs 402");
     }
   });
