@@ -1,16 +1,35 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { getDailyUsage } from "../utils/usage-tracker.js";
-import { DAILY_MAX_TOKENS, BudgetExceededError } from "../utils/token-budget.js";
+import { assertDailyBudget, BudgetExceededError, estimateTokens } from "../utils/token-budget.js";
 
-export async function costGuard(_request: FastifyRequest, reply: FastifyReply): Promise<void> {
+/**
+ * Checks the daily Gemini token ceiling for a turn. Returns the error when the
+ * turn would exceed it, or null when it may proceed. Shared by the HTTP route
+ * guard and the WebSocket audio path.
+ */
+export async function checkDailyTokenBudget(
+  text: string,
+): Promise<{ error: BudgetExceededError; currentTokens: number } | null> {
   const usage = await getDailyUsage();
-  if (usage.tokens >= DAILY_MAX_TOKENS) {
-    const err = new BudgetExceededError("daily", DAILY_MAX_TOKENS, usage.tokens);
+  try {
+    assertDailyBudget(usage.tokens, Math.max(1, estimateTokens(text)));
+    return null;
+  } catch (err) {
+    if (err instanceof BudgetExceededError) return { error: err, currentTokens: usage.tokens };
+    throw err;
+  }
+}
+
+export async function costGuard(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const body = request.body as { text?: unknown } | undefined;
+  const text = typeof body?.text === "string" ? body.text : "";
+  const exceeded = await checkDailyTokenBudget(text);
+  if (exceeded) {
     await reply.status(429).header("Retry-After", "3600").send({
       error: "budget_exceeded",
-      message: err.message,
-      limit: DAILY_MAX_TOKENS,
-      current: usage.tokens,
+      message: exceeded.error.message,
+      limit: exceeded.error.limit,
+      current: exceeded.currentTokens,
     });
   }
 }

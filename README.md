@@ -44,7 +44,11 @@ The mock column is what the LatencyHUD reports on a local run; the live column i
 ## Cost controls
 
 - Provider caps set and documented in [`docs/cost.md`](docs/cost.md)
-- Daily token ceiling (50,000): `429` on the HTTP text route, 80% alert via structured log
+- Daily caps (UTC day, all env-configurable), enforced on both the HTTP text route and the audio WebSocket:
+  - `DAILY_MAX_TOKENS` (50,000): Gemini turns get `429 budget_exceeded` (HTTP) / `budget_exceeded` error (WS); 80% alert via structured log
+  - `DAILY_MAX_TTS_CHARS` (650): ElevenLabs characters are reserved before each request; over the cap TTS is routed to Deepgram Aura instead
+  - `DAILY_MAX_STT_SECONDS` (3600): live Deepgram audio is metered; over the cap the client gets `stt_budget_exhausted` and falls back to text input
+- `402`/`429` (and ElevenLabs `quota_exceeded`) mean "budget exhausted": no circuit-breaker count, immediate fallback (ElevenLabs → Aura, Deepgram STT → text input)
 - Circuit breaker per provider (opens after 5 consecutive failures)
 - Pre-flight character/token budget before every Gemini or ElevenLabs call
 - All provider keys server-side only — see [`docs/security.md`](docs/security.md)
@@ -118,7 +122,7 @@ Local dev without admin: leave it blank. To try it: set it, restart `pnpm turbo 
 | Web    | React 19, Vite 6, GSAP 3, CSS design tokens (Obsidian Forge)        |
 | Deploy | Fly.io (API), Vercel (web), Neon (Postgres), Upstash (Redis)        |
 
-[^gemini]: The pinned id is `MODEL_ID = "gemini-1.5-flash"` in `packages/api/src/modules/agent/gemini.service.ts`. Google rotates model ids — if it 404s, bump that constant to the current Flash id. Docs say "Gemini Flash" on purpose.
+[^gemini]: The pinned id is `gemini-3.1-flash-lite-preview` (`GEMINI_MODEL_ID` in `packages/api/src/modules/agent/gemini.tools.ts`), overridable with the `GEMINI_MODEL` env var. On the free tier `gemini-flash-latest` timed out at 45 s while flash-lite-preview answered in ~1.6 s. Google rotates model ids — if it 404s, set `GEMINI_MODEL` to the current Flash id.
 
 ## Scripts
 

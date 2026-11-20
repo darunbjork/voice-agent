@@ -3,7 +3,7 @@ import { config } from "dotenv";
 
 config({ path: ["../../.env", ".env"] });
 
-const envSchema = z.object({
+export const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 
@@ -21,8 +21,16 @@ const envSchema = z.object({
 
   DEEPGRAM_API_KEY: z.string().optional().default(""),
   ELEVENLABS_API_KEY: z.string().optional().default(""),
-  ELEVENLABS_VOICE_ID: z.string().default("21m00Tcm4TlvDq8ikWAM"),
+  // Premade "Lily" — usable on the ElevenLabs free plan (library voices are not).
+  ELEVENLABS_VOICE_ID: z.string().min(1).default("pFZP5JQG7iQjIQuC4Bku"),
   GEMINI_API_KEY: z.string().optional().default(""),
+  GEMINI_MODEL: z.string().min(1).default("gemini-3.1-flash-lite-preview"),
+
+  // Daily spend caps (UTC day). 0 disables that provider for the day.
+  DAILY_MAX_TOKENS: z.coerce.number().int().positive().default(50_000),
+  // ElevenLabs characters/day; over the cap TTS is routed to Deepgram Aura.
+  DAILY_MAX_TTS_CHARS: z.coerce.number().int().nonnegative().default(650),
+  DAILY_MAX_STT_SECONDS: z.coerce.number().int().nonnegative().default(3600),
 
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
   JWT_EXPIRES_IN: z.string().default("7d"),

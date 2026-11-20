@@ -8,12 +8,33 @@ import {
   recordFailure,
   CircuitOpenError,
 } from "../../utils/circuit-breaker.js";
+import {
+  getDailyLimits,
+  isBudgetExhaustedStatus,
+  isSttDailyBudgetExhausted,
+} from "../../utils/token-budget.js";
+import { incrementUsage } from "../../utils/usage-tracker.js";
 import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared-types";
 
 const DEEPGRAM_WS_URL =
   "wss://api.deepgram.com/v1/listen?model=nova-2&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&punctuate=true&endpointing=500&smart_format=true";
 
+/** linear16 mono @ 16 kHz = 2 bytes × 16000 samples per second. */
+const PCM_BYTES_PER_SECOND = 32_000;
+/** Persist metered STT seconds this often so concurrent sessions see them. */
+const STT_FLUSH_EVERY_SECONDS = 10;
+
+const TEXT_INPUT_FALLBACK_MESSAGE =
+  "Speech recognition is temporarily unavailable. Use text input.";
+
 export type TranscriptHandler = (msg: ServerAudioMessage) => void;
+
+export interface DeepgramProxyOptions {
+  /** Live STT seconds already used today (from the usage tracker). */
+  sttSecondsUsedToday?: number;
+  /** Deepgram listen endpoint override (tests). */
+  endpoint?: string;
+}
 
 export interface DeepgramProxy {
   sendAudio(chunk: ArrayBuffer): void;
@@ -26,8 +47,19 @@ export function createDeepgramProxy(
   log: FastifyBaseLogger,
   sessionId: string,
   signal?: AbortSignal,
+  options: DeepgramProxyOptions = {},
 ): DeepgramProxy {
-  return withAbortSignal(buildDeepgramProxy(onTranscript, log, sessionId), signal);
+  return withAbortSignal(buildDeepgramProxy(onTranscript, log, sessionId, options), signal);
+}
+
+/** Proxy that ignores audio; the client socket stays open so text_input still works. */
+function degradedProxy(onTranscript: TranscriptHandler, code: string): DeepgramProxy {
+  onTranscript({ type: "error", code, message: TEXT_INPUT_FALLBACK_MESSAGE });
+  return {
+    ready: false,
+    sendAudio(): void {},
+    close(): void {},
+  };
 }
 
 function withAbortSignal(proxy: DeepgramProxy, signal?: AbortSignal): DeepgramProxy {
@@ -44,6 +76,7 @@ function buildDeepgramProxy(
   onTranscript: TranscriptHandler,
   log: FastifyBaseLogger,
   sessionId: string,
+  options: DeepgramProxyOptions,
 ): DeepgramProxy {
   if (env.VOICE_MOCK && !env.DEEPGRAM_LIVE) {
     return createMockProxy(onTranscript, log, sessionId);
@@ -55,21 +88,19 @@ function buildDeepgramProxy(
     if (!(err instanceof CircuitOpenError)) throw err;
 
     log.warn({ provider: err.provider }, "STT circuit open");
-    onTranscript({
-      type: "error",
-      code: "deepgram_circuit_open",
-      message: "Speech recognition is temporarily unavailable. Use text input.",
-    });
-
-    // Degraded proxy: the socket stays open so text_input still works.
-    return {
-      ready: false,
-      sendAudio(): void {},
-      close(): void {},
-    };
+    return degradedProxy(onTranscript, "deepgram_circuit_open");
   }
 
-  return createLiveProxy(onTranscript, log, sessionId);
+  const usedToday = options.sttSecondsUsedToday ?? 0;
+  if (isSttDailyBudgetExhausted(usedToday)) {
+    log.warn(
+      { sessionId, usedToday, dailyMaxSttSeconds: getDailyLimits().sttSeconds },
+      "STT daily budget reached — text input only",
+    );
+    return degradedProxy(onTranscript, "stt_budget_exhausted");
+  }
+
+  return createLiveProxy(onTranscript, log, sessionId, usedToday, options.endpoint);
 }
 
 const MOCK_UTTERANCE_GAP_MS = 500;
@@ -137,6 +168,8 @@ function createLiveProxy(
   onTranscript: TranscriptHandler,
   log: FastifyBaseLogger,
   sessionId: string,
+  sttSecondsUsedToday: number,
+  endpoint: string = DEEPGRAM_WS_URL,
 ): DeepgramProxy {
   if (!env.DEEPGRAM_API_KEY) {
     throw new Error("DEEPGRAM_API_KEY is required when live speech recognition is enabled");
@@ -149,11 +182,63 @@ function createLiveProxy(
   let emptyResults = 0;
   let interims = 0;
   let finals = 0;
+  /** Set once the handshake was rejected and already reported to the client. */
+  let handshakeHandled = false;
 
-  const dg = new WebSocket(DEEPGRAM_WS_URL, {
+  // STT metering: audio bytes forwarded to Deepgram, persisted in whole seconds.
+  let dailySeconds = sttSecondsUsedToday;
+  let unflushedBytes = 0;
+  let budgetCutoff = false;
+
+  const flushUsage = (final: boolean): void => {
+    const seconds = final
+      ? Math.ceil(unflushedBytes / PCM_BYTES_PER_SECOND)
+      : Math.floor(unflushedBytes / PCM_BYTES_PER_SECOND);
+    if (seconds <= 0) return;
+    unflushedBytes = Math.max(0, unflushedBytes - seconds * PCM_BYTES_PER_SECOND);
+    dailySeconds += seconds;
+    void incrementUsage({ sttSeconds: seconds })
+      .then((updated) => {
+        // Pick up seconds metered by other concurrent sessions.
+        dailySeconds = Math.max(dailySeconds, updated.sttSeconds);
+      })
+      .catch((err: unknown) => {
+        log.warn({ err, sessionId }, "STT usage increment failed");
+      });
+  };
+
+  const dg = new WebSocket(endpoint, {
     headers: {
       Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
     },
+  });
+
+  // Handshake rejected (e.g. 402 out of credits, 429 rate-limited). Without
+  // this listener ws reports a generic "Unexpected server response" error.
+  dg.on("unexpected-response", (_req, res) => {
+    const status = res.statusCode ?? 0;
+    res.resume();
+    handshakeHandled = true;
+    sawError = true;
+    closed = true;
+    if (isBudgetExhaustedStatus(status)) {
+      // Out of credits / rate-limited is not a provider fault: no breaker count.
+      log.warn({ sessionId, status }, "Deepgram STT budget exhausted — text input only");
+      onTranscript({
+        type: "error",
+        code: "stt_budget_exhausted",
+        message: TEXT_INPUT_FALLBACK_MESSAGE,
+      });
+    } else {
+      recordFailure("deepgram");
+      log.error({ sessionId, status }, "Deepgram handshake rejected");
+      onTranscript({
+        type: "error",
+        code: "deepgram_error",
+        message: `Unexpected server response: ${status}`,
+      });
+    }
+    dg.terminate();
   });
 
   dg.on("open", () => {
@@ -209,6 +294,8 @@ function createLiveProxy(
   });
 
   dg.on("error", (err) => {
+    // Already reported (rejected handshake) or we closed it ourselves.
+    if (handshakeHandled || closed) return;
     sawError = true;
     recordFailure("deepgram");
     log.error({ err, sessionId }, "Deepgram WebSocket error");
@@ -220,6 +307,7 @@ function createLiveProxy(
   });
 
   dg.on("close", () => {
+    flushUsage(true);
     log.info({ results, emptyResults, interims, finals }, "Deepgram WebSocket closed");
     if (!closed && !sawError) {
       // Server dropped us mid-session — already counted if "error" fired.
@@ -231,10 +319,27 @@ function createLiveProxy(
   const close = (): void => {
     if (closed) return;
     closed = true;
+    flushUsage(true);
     if (dg.readyState === WebSocket.OPEN) {
       dg.send(JSON.stringify({ type: "CloseStream" }));
       dg.close();
+    } else if (dg.readyState === WebSocket.CONNECTING) {
+      dg.terminate();
     }
+  };
+
+  const cutOffForBudget = (): void => {
+    budgetCutoff = true;
+    log.warn(
+      { sessionId, dailySeconds, dailyMaxSttSeconds: getDailyLimits().sttSeconds },
+      "STT daily budget reached mid-session — text input only",
+    );
+    close();
+    onTranscript({
+      type: "error",
+      code: "stt_budget_exhausted",
+      message: TEXT_INPUT_FALLBACK_MESSAGE,
+    });
   };
 
   return {
@@ -243,8 +348,15 @@ function createLiveProxy(
     },
 
     sendAudio(chunk: ArrayBuffer): void {
-      if (closed || dg.readyState !== WebSocket.OPEN) return;
+      if (closed || budgetCutoff || dg.readyState !== WebSocket.OPEN) return;
+      const pendingSeconds = (unflushedBytes + chunk.byteLength) / PCM_BYTES_PER_SECOND;
+      if (dailySeconds + pendingSeconds > getDailyLimits().sttSeconds) {
+        cutOffForBudget();
+        return;
+      }
       dg.send(Buffer.from(chunk));
+      unflushedBytes += chunk.byteLength;
+      if (unflushedBytes >= STT_FLUSH_EVERY_SECONDS * PCM_BYTES_PER_SECOND) flushUsage(false);
     },
 
     close,

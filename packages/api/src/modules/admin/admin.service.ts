@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { getDailyUsage } from "../../utils/usage-tracker.js";
 import { getAllCircuitSnapshots } from "../../utils/circuit-breaker.js";
-import { DAILY_MAX_TOKENS } from "../../utils/token-budget.js";
+import { getDailyLimits } from "../../utils/token-budget.js";
 
 export type SessionListItem = {
   id: string;
@@ -66,6 +66,7 @@ export type UsageSummary = {
 export async function getUsageSummary(app: FastifyInstance): Promise<UsageSummary> {
   const usage = await getDailyUsage();
   const circuits = getAllCircuitSnapshots();
+  const DAILY_MAX_TOKENS = getDailyLimits().tokens;
   const pct = DAILY_MAX_TOKENS > 0 ? Math.round((usage.tokens / DAILY_MAX_TOKENS) * 100) : 0;
 
   app.log.debug({ usage, circuits }, "admin usage summary");

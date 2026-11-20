@@ -1,7 +1,7 @@
 import type { createClient } from "redis";
 import * as Sentry from "@sentry/node";
 
-import { DAILY_MAX_TOKENS } from "./token-budget.js";
+import { getDailyLimits } from "./token-budget.js";
 import { env } from "../env.js";
 
 type AppRedisClient = ReturnType<typeof createClient>;
@@ -94,10 +94,11 @@ export async function incrementUsage(delta: {
 
 export async function isApproachingDailyLimit(): Promise<boolean> {
   const usage = await getDailyUsage();
-  return usage.tokens >= DAILY_MAX_TOKENS * 0.8;
+  return usage.tokens >= getDailyLimits().tokens * 0.8;
 }
 
 async function maybeAlert(usage: UsageSnapshot): Promise<void> {
+  const DAILY_MAX_TOKENS = getDailyLimits().tokens;
   if (usage.tokens < DAILY_MAX_TOKENS * 0.8) return;
   if (alertedDates.has(usage.date)) return;
 
