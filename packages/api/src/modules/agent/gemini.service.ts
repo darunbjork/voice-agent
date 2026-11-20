@@ -1,4 +1,3 @@
-import { GoogleGenAI } from "@google/genai";
 import type { FastifyBaseLogger } from "fastify";
 import type { GeminiAgentOutput, IntentType } from "@voice-agent/shared-types";
 import { env } from "../../env.js";
@@ -8,19 +7,15 @@ import {
   BudgetExceededError,
 } from "../../utils/token-budget.js";
 import { mockGeminiOutput } from "../../utils/voice-mock.js";
+import { recordFailure, CircuitOpenError } from "../../utils/circuit-breaker.js";
 import {
-  assertCircuitClosed,
-  recordSuccess,
-  recordFailure,
-  CircuitOpenError,
-} from "../../utils/circuit-breaker.js";
-import {
+  AGENT_RESPONSE_JSON_SCHEMA_STRICT,
   GEMINI_AGENT_RESPONSE_JSON_SCHEMA,
   GeminiAgentOutputSchema,
   type GeminiAgentOutputParsed,
 } from "./gemini.schema.js";
-import { GEMINI_THINKING_CONFIG, withCurrentDate } from "./gemini.tools.js";
-import { GeminiUnavailableError, generateWithFallback, geminiModels } from "./gemini.call.js";
+import { withCurrentDate } from "./gemini.tools.js";
+import { LlmUnavailableError, generateLlm, llmChain, type LlmResult } from "./llm.call.js";
 import { AgentTurnAbortedError, isTurnAborted } from "../../utils/turn-abort.js";
 
 export const SYSTEM_PROMPT = `You are a voice assistant. Your reply is spoken aloud: plain text, no markdown, at most 3 sentences.
@@ -69,70 +64,61 @@ export async function generateAgentOutput(
     return mockGeminiOutput(intent);
   }
 
-  if (!env.GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is required when VOICE_MOCK=false");
+  if (llmChain().length === 0) {
+    throw new Error("GEMINI_API_KEY (or GROQ_API_KEY) is required when VOICE_MOCK=false");
   }
 
   if (signal?.aborted) {
     throw new AgentTurnAbortedError("Gemini request aborted before start");
   }
 
-  assertCircuitClosed("gemini");
+  log.info(
+    { chain: llmChain().map((c) => `${c.provider}/${c.model}`), textLen: userText.length },
+    "LLM request",
+  );
 
-  const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
-
-  log.info({ models: geminiModels(), textLen: userText.length }, "Gemini request");
-
-  let rawText: string;
-  let finishReason: string | undefined;
-  let usage: unknown;
-  let answeredBy: string | undefined;
+  // Breakers are checked and settled per provider inside generateLlm, so an
+  // open Gemini circuit no longer blocks the Groq fallback.
+  let result: LlmResult;
   try {
-    const { response, model } = await generateWithFallback(
-      ai,
+    result = await generateLlm(
       {
-        contents: userText,
-        config: {
-          systemInstruction: withCurrentDate(SYSTEM_PROMPT),
-          temperature: 0.3,
-          responseMimeType: "application/json",
-          responseJsonSchema: GEMINI_AGENT_RESPONSE_JSON_SCHEMA,
-          thinkingConfig: GEMINI_THINKING_CONFIG,
+        system: withCurrentDate(SYSTEM_PROMPT),
+        user: userText,
+        temperature: 0.3,
+        json: {
+          name: "agent_reply",
+          schema: GEMINI_AGENT_RESPONSE_JSON_SCHEMA,
+          strictSchema: AGENT_RESPONSE_JSON_SCHEMA_STRICT,
         },
       },
       { signal, log },
     );
-    answeredBy = model;
-    rawText = response.text ?? "";
-    finishReason = response.candidates?.[0]?.finishReason;
-    usage = response.usageMetadata;
   } catch (err) {
     if (signal?.aborted) {
       throw new AgentTurnAbortedError("Gemini request aborted");
     }
-    // Every attempt failed. Rate limits (429) are budget, not a provider fault.
-    if (!(err instanceof GeminiUnavailableError && err.quotaOnly)) recordFailure("gemini");
     throw err;
   }
+  const rawText = result.text;
+  const { finishReason, usage, provider } = result;
 
   if (signal?.aborted) {
     throw new AgentTurnAbortedError("Gemini request aborted after response");
   }
 
-  log.info({ model: answeredBy, finishReason, usage }, "Gemini response");
+  log.info({ provider, model: result.model, finishReason, usage }, "LLM response");
 
   if (!rawText) {
     // Empty body is a provider-side anomaly.
-    recordFailure("gemini");
+    recordFailure(provider);
     log.error({ finishReason, usage }, "Gemini returned an empty response");
     throw new GeminiParseError("Empty response from Gemini", "", finishReason);
   }
 
   // Parse errors below do NOT trip the breaker — they indicate a prompt /
   // schema problem, not provider unavailability.
-  const parsed = parseAndValidate(rawText, log, finishReason);
-  recordSuccess("gemini");
-  return parsed;
+  return parseAndValidate(rawText, log, finishReason);
 }
 
 export function parseAndValidate(
@@ -205,8 +191,8 @@ export async function safeGenerateAgentOutput(
         card: null,
       };
     }
-    if (err instanceof GeminiUnavailableError) {
-      log.warn({ failures: err.failures }, "Gemini unavailable — telling the user");
+    if (err instanceof LlmUnavailableError) {
+      log.warn({ failures: err.failures }, "Every LLM provider failed — telling the user");
       return {
         reply: "I could not reach my language model just now. Please ask again in a moment.",
         intent: "fallback",

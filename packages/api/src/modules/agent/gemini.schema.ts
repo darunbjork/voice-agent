@@ -113,3 +113,18 @@ export const GEMINI_AGENT_RESPONSE_JSON_SCHEMA = {
   },
   required: ["reply", "intent", "card"],
 } as const;
+
+/** Same schema with every object closed (additionalProperties: false), as strict mode requires. */
+export function toStrictJsonSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(toStrictJsonSchema);
+  if (!schema || typeof schema !== "object") return schema;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(schema)) out[k] = toStrictJsonSchema(v);
+  if ((schema as { type?: unknown }).type === "object") out.additionalProperties = false;
+  return out;
+}
+
+/** For OpenAI-compatible strict structured outputs (Groq). */
+export const AGENT_RESPONSE_JSON_SCHEMA_STRICT = toStrictJsonSchema(
+  GEMINI_AGENT_RESPONSE_JSON_SCHEMA,
+) as object;

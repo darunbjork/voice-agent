@@ -29,6 +29,12 @@ export const envSchema = z.object({
   // >15 s hangs seen live on the preview model). Empty disables the fallback.
   GEMINI_FALLBACK_MODEL: z.string().default("gemini-3.1-flash-lite"),
 
+  // Non-Google last resort in the LLM chain; skipped when the key is unset.
+  // gpt-oss-20b: fastest production model on Groq (~1000 T/s), strict
+  // json_schema support. llama-3.1-8b-instant was shut down 2026-08-16.
+  GROQ_API_KEY: z.string().optional().default(""),
+  GROQ_MODEL: z.string().min(1).default("openai/gpt-oss-20b"),
+
   // nova-3 supports keyterm prompting; nova-2 models fall back to `keywords`.
   DEEPGRAM_MODEL: z.string().min(1).default("nova-3"),
   DEEPGRAM_KEYTERMS: z

@@ -1,4 +1,4 @@
-export type ProviderName = "gemini" | "deepgram" | "elevenlabs";
+export type ProviderName = "gemini" | "groq" | "deepgram" | "elevenlabs";
 
 export type CircuitState = "closed" | "open" | "half_open";
 
@@ -128,7 +128,7 @@ export function getCircuitSnapshot(provider: ProviderName): CircuitSnapshot {
 }
 
 export function getAllCircuitSnapshots(): CircuitSnapshot[] {
-  return (["gemini", "deepgram", "elevenlabs"] as ProviderName[]).map(getCircuitSnapshot);
+  return (["gemini", "groq", "deepgram", "elevenlabs"] as ProviderName[]).map(getCircuitSnapshot);
 }
 
 export function resetAllCircuits(): void {

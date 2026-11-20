@@ -20,7 +20,7 @@ const healthResponseSchema = {
         properties: {
           provider: {
             type: "string",
-            enum: ["gemini", "deepgram", "elevenlabs"],
+            enum: ["gemini", "groq", "deepgram", "elevenlabs"],
           },
           state: { type: "string", enum: ["closed", "open", "half_open"] },
           failures: { type: "number" },
