@@ -30,16 +30,19 @@ export const envSchema = z.object({
   GEMINI_FALLBACK_MODEL: z.string().default("gemini-3.1-flash-lite"),
 
   // Non-Google last resort in the LLM chain; skipped when the key is unset.
-  // gpt-oss-20b: fastest production model on Groq (~1000 T/s), strict
-  // json_schema support. llama-3.1-8b-instant was shut down 2026-08-16.
+  // gpt-oss-120b: strongest production text model on Groq, strict json_schema.
+  // With the same prompt, gpt-oss-20b still invented facts ("Article 25 GDPR
+  // is the right of access"); 120b said it was unsure, at 150–550 ms.
   GROQ_API_KEY: z.string().optional().default(""),
-  GROQ_MODEL: z.string().min(1).default("openai/gpt-oss-20b"),
+  GROQ_MODEL: z.string().min(1).default("openai/gpt-oss-120b"),
 
   // nova-3 supports keyterm prompting; nova-2 models fall back to `keywords`.
   DEEPGRAM_MODEL: z.string().min(1).default("nova-3"),
   DEEPGRAM_KEYTERMS: z
     .string()
-    .default("RAG,MCP,agentic,LLM,API,Gemini,Deepgram,ElevenLabs")
+    .default(
+      "ChatGPT,OpenAI,n8n,RAG,MCP,Art25,LLM,TypeScript,React,Node.js,agentic,API,Gemini,Deepgram,ElevenLabs",
+    )
     .transform((v) =>
       v
         .split(",")

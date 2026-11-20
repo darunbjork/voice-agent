@@ -36,9 +36,10 @@ export function deepgramListenParams(): URLSearchParams {
     smart_format: "true",
     // Silence that ends a finalised segment (is_final / speech_final).
     endpointing: "500",
-    // UtteranceEnd after 1 s without words: pauses inside a sentence ("What does
-    // goodnight mean … in Swedish?") no longer split it into two turns.
-    utterance_end_ms: "1000",
+    // UtteranceEnd after 1.5 s without words. 1 s still split live sentences
+    // ("Which language is more" … "into tech?"); the server also merges a
+    // continuation that arrives before the reply (audio.routes.ts).
+    utterance_end_ms: "1500",
     vad_events: "true",
   });
   const nova3 = env.DEEPGRAM_MODEL.startsWith("nova-3");
@@ -65,7 +66,7 @@ const KEEPALIVE_TICK_MS = 1_000;
 /** Stop keeping an unused stream alive after this; the next audio frame reconnects. */
 const KEEPALIVE_MAX_IDLE_MS = 60_000;
 /** Emit an utterance if UtteranceEnd never arrives (e.g. dropped message). */
-const UTTERANCE_FLUSH_FALLBACK_MS = 2_000;
+const UTTERANCE_FLUSH_FALLBACK_MS = 2_500;
 
 const TEXT_INPUT_FALLBACK_MESSAGE =
   "Speech recognition is temporarily unavailable. Use text input.";

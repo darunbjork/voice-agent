@@ -158,6 +158,7 @@ describe("Gemini request configuration", () => {
       reply: "The United States has 50 states.",
       intent: "general",
       card: null,
+      source: `gemini/${env.GEMINI_MODEL}`,
     });
   });
 });

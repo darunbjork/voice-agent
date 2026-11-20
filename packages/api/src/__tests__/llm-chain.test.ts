@@ -262,7 +262,7 @@ describe("Groq request contract (mocked)", () => {
       content: "How many states does the USA have?",
     });
     expect(body.reasoning_effort).toBe("low");
-    expect(body.temperature).toBe(0.3);
+    expect(body.temperature).toBe(0.1);
     expect(body.response_format).toEqual({
       type: "json_schema",
       json_schema: { name: "agent_reply", strict: true, schema: AGENT_RESPONSE_JSON_SCHEMA_STRICT },
@@ -305,6 +305,7 @@ describe("agent with Gemini down (as at 15:40–15:42 UTC)", () => {
       reply: "The United States has 50 states.",
       intent: "general",
       card: null,
+      source: "groq/openai/gpt-oss-20b",
     });
     expect(generateContentMock.mock.calls.map((c) => (c[0] as { model: string }).model)).toEqual([
       "gemini-primary",
@@ -369,6 +370,11 @@ describe("agent with Gemini down (as at 15:40–15:42 UTC)", () => {
         JSON.stringify({ reply: "god natt", intent: "translate", card: { type: "translation" } }),
       );
     const out = await safeGenerateAgentOutput("goodnight in Swedish", recordingLogger().log);
-    expect(out).toEqual({ reply: "god natt", intent: "translate", card: null });
+    expect(out).toEqual({
+      reply: "god natt",
+      intent: "translate",
+      card: null,
+      source: "groq/openai/gpt-oss-20b",
+    });
   });
 });

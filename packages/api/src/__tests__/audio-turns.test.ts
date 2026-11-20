@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
 import { buildApp } from "../app.js";
-import { turnLimits } from "../modules/audio/audio.routes.js";
+import { turnLimits, mergeTranscripts } from "../modules/audio/audio.routes.js";
 
 // Controllable agent: each test decides how long a turn takes or whether it hangs.
 const { handleUtteranceMock } = vi.hoisted(() => ({ handleUtteranceMock: vi.fn() }));
@@ -79,25 +79,6 @@ describe("audio WebSocket turns always end in a reply or a visible error", () =>
     msgs.filter((m) => m.type === "agent_response").map((m) => m.reply?.text);
   const errors = (msgs: Msg[]) => msgs.filter((m) => m.type === "error").map((m) => m.code);
 
-  it("a second question while the first is still thinking no longer drops the first", async () => {
-    handleUtteranceMock.mockImplementation(async (input: { text: string }) => {
-      await sleep(input.text.startsWith("slow") ? 300 : 10);
-      return reply(`answer to ${input.text}`);
-    });
-
-    const msgs = await session(async (ws) => {
-      ask(ws, "slow: What does RAG stand for?");
-      await sleep(50);
-      ask(ws, "fast: What's MCP?");
-    }, 700);
-
-    expect(replies(msgs)).toEqual([
-      "answer to slow: What does RAG stand for?",
-      "answer to fast: What's MCP?",
-    ]);
-    expect(errors(msgs)).toEqual([]);
-  });
-
   it("a turn that hangs ends with a visible turn_timeout error", async () => {
     turnLimits.timeoutMs = 150;
     handleUtteranceMock.mockImplementation(hangUntilAborted);
@@ -106,22 +87,6 @@ describe("audio WebSocket turns always end in a reply or a visible error", () =>
 
     expect(replies(msgs)).toEqual([]);
     expect(errors(msgs)).toEqual(["turn_timeout"]);
-  });
-
-  it("the next queued question still runs after a timed-out one", async () => {
-    turnLimits.timeoutMs = 150;
-    handleUtteranceMock
-      .mockImplementationOnce(hangUntilAborted)
-      .mockImplementationOnce(async () => reply("second answer"));
-
-    const msgs = await session(async (ws) => {
-      ask(ws, "first");
-      await sleep(20);
-      ask(ws, "second");
-    }, 500);
-
-    expect(errors(msgs)).toEqual(["turn_timeout"]);
-    expect(replies(msgs)).toEqual(["second answer"]);
   });
 
   it("an agent crash ends with a visible error", async () => {
@@ -143,18 +108,105 @@ describe("audio WebSocket turns always end in a reply or a visible error", () =>
     expect(replies(msgs)).toEqual(["kept"]);
   });
 
-  it("refuses visibly once too many questions are waiting", async () => {
-    turnLimits.maxQueued = 1;
+  // ── Split utterances (live: "Can I build" / "an animation video?" got two replies) ──
+
+  it("a continuation before the reply cancels it and answers the merged text once", async () => {
+    const seen: string[] = [];
+    handleUtteranceMock.mockImplementation(
+      async (input: { text: string; signal?: AbortSignal }) => {
+        seen.push(input.text);
+        await sleep(200);
+        if (input.signal?.aborted) throw new Error("aborted");
+        return reply(`answer to: ${input.text}`);
+      },
+    );
+
+    const msgs = await session(async (ws) => {
+      ask(ws, "Can I build");
+      await sleep(60);
+      ask(ws, "an animation video?");
+    }, 700);
+
+    expect(seen).toEqual(["Can I build", "Can I build an animation video?"]);
+    expect(replies(msgs)).toEqual(["answer to: Can I build an animation video?"]);
+    expect(errors(msgs)).toEqual([]);
+  });
+
+  it("the cancelled reply is suppressed even if the agent ignores the abort", async () => {
     handleUtteranceMock.mockImplementation(async (input: { text: string }) => {
-      await sleep(150);
-      return reply(input.text);
+      await sleep(input.text === "Which language is more" ? 200 : 20);
+      return reply(`answer to: ${input.text}`);
     });
-    const msgs = await session((ws) => {
-      ask(ws, "one");
-      ask(ws, "two");
-      ask(ws, "three");
+
+    const msgs = await session(async (ws) => {
+      ask(ws, "Which language is more");
+      await sleep(50);
+      ask(ws, "into tech?");
     }, 600);
-    expect(replies(msgs)).toEqual(["one", "two"]);
-    expect(errors(msgs)).toEqual(["turn_queue_full"]);
+
+    expect(replies(msgs)).toEqual(["answer to: Which language is more into tech?"]);
+  });
+
+  it("three fragments become one turn", async () => {
+    const seen: string[] = [];
+    handleUtteranceMock.mockImplementation(
+      async (input: { text: string; signal?: AbortSignal }) => {
+        seen.push(input.text);
+        await sleep(150);
+        if (input.signal?.aborted) throw new Error("aborted");
+        return reply(input.text);
+      },
+    );
+
+    const msgs = await session(async (ws) => {
+      ask(ws, "What kind of app would");
+      await sleep(40);
+      ask(ws, "attract");
+      await sleep(40);
+      ask(ws, "users, developers,");
+    }, 700);
+
+    expect(replies(msgs)).toEqual(["What kind of app would attract users, developers,"]);
+    expect(seen.at(-1)).toBe("What kind of app would attract users, developers,");
+  });
+
+  it("after a reply was delivered, the next utterance is a new question", async () => {
+    handleUtteranceMock.mockImplementation(async (input: { text: string }) => {
+      await sleep(20);
+      return reply(`answer to: ${input.text}`);
+    });
+
+    const msgs = await session(async (ws) => {
+      ask(ws, "What is RAG?");
+      await sleep(150);
+      ask(ws, "And what is MCP?");
+    }, 400);
+
+    expect(replies(msgs)).toEqual(["answer to: What is RAG?", "answer to: And what is MCP?"]);
+  });
+
+  it("a timed-out turn still shows an error, and the next question runs", async () => {
+    turnLimits.timeoutMs = 150;
+    handleUtteranceMock
+      .mockImplementationOnce(hangUntilAborted)
+      .mockImplementationOnce(async () => reply("second answer"));
+
+    const msgs = await session(async (ws) => {
+      ask(ws, "first");
+      await sleep(250);
+      ask(ws, "second");
+    }, 450);
+
+    expect(errors(msgs)).toEqual(["turn_timeout"]);
+    expect(replies(msgs)).toEqual(["second answer"]);
+  });
+
+  it("mergeTranscripts joins text and keeps the latest latency", () => {
+    expect(
+      mergeTranscripts(
+        { type: "transcript_final", text: " Can I build ", latencyMs: 10 },
+        { type: "transcript_final", text: "an animation video?", latencyMs: 20 },
+      ),
+    ).toEqual({ type: "transcript_final", text: "Can I build an animation video?", latencyMs: 20 });
   });
 });

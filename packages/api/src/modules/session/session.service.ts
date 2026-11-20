@@ -18,7 +18,8 @@ export type SessionContextTurn = {
   intent?: IntentType;
 };
 
-const CONTEXT_TURNS = 3;
+/** Turns of history sent with each slow-path question (trimmed to MAX_CONTEXT_CHARS). */
+const CONTEXT_TURNS = 6;
 
 export async function createSession(
   prisma: PrismaClient,

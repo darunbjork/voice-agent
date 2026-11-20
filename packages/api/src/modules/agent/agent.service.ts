@@ -30,6 +30,22 @@ export type HandleUtteranceResult = {
 };
 
 const MAX_INPUT_CHARS = 500;
+/** Recent conversation sent with a general question (~750 tokens). */
+export const MAX_CONTEXT_CHARS = 3000;
+
+/**
+ * The current utterance with the recent conversation, newest turns kept, so
+ * acronyms resolve from what was said ("MCP" = Model Context Protocol, not a
+ * guessed expansion).
+ */
+export function buildPromptWithContext(text: string, context: SessionContextTurn[]): string {
+  const lines = context
+    .filter((t) => t.text.trim().length > 0)
+    .map((t) => `${t.role === "user" ? "User" : "Assistant"}: ${t.text.trim()}`);
+  while (lines.length > 0 && lines.join("\n").length > MAX_CONTEXT_CHARS) lines.shift();
+  if (lines.length === 0) return text;
+  return `Conversation so far:\n${lines.join("\n")}\n\nCurrent message from the user:\n${text}`;
+}
 /** Most recent part of the conversation that is sent for a summary (~1k tokens). */
 export const MAX_CONVERSATION_SUMMARY_CHARS = 4000;
 
@@ -84,6 +100,8 @@ export async function handleUtterance(
   let output: GeminiAgentOutput;
   let intent: IntentType;
   let viaFastPath: boolean;
+  /** Which LLM produced the reply ("groq/openai/gpt-oss-120b"), or "tool". */
+  let source = "tool";
 
   const conversationSummary = fast?.intent === "summarize" && fast.slots.scope === "conversation";
   const conversation = conversationSummary ? await loadConversation(input, log) : "";
@@ -121,15 +139,11 @@ export async function handleUtterance(
   } else {
     viaFastPath = false;
 
-    let promptText = trimmed;
-    if (input.context && input.context.length > 0) {
-      const lines = input.context.map((t) =>
-        t.role === "user" ? `User: ${t.text}` : `Agent: ${t.text}`,
-      );
-      promptText = `${lines.join("\n")}\nUser: ${trimmed}`;
-    }
+    const promptText = buildPromptWithContext(trimmed, input.context ?? []);
 
-    output = await safeGenerateAgentOutput(promptText, log, undefined, input.signal);
+    const generated = await safeGenerateAgentOutput(promptText, log, undefined, input.signal);
+    source = generated.source ?? "none";
+    output = { reply: generated.reply, intent: generated.intent, card: generated.card };
     intent = output.intent;
 
     log.info(
@@ -170,6 +184,7 @@ export async function handleUtterance(
       hasCard: output.card !== null,
       pipelineMs,
       sttMs: input.sttLatencyMs,
+      source,
       textPreview: output.reply.slice(0, 80),
     },
     "Agent pipeline complete",
