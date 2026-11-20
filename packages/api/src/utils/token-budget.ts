@@ -4,7 +4,8 @@ export type BudgetOperation = "agent_classify" | "agent_response" | "session_sum
 
 export const TOKEN_BUDGETS: Record<BudgetOperation, number> = {
   agent_classify: 200,
-  agent_response: 500,
+  // System prompt (~400) + up to 3 context turns + the user's turn.
+  agent_response: 1500,
   session_summary: 300,
   tts_reply: 600,
 } as const;

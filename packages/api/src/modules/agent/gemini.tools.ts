@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { env } from "../../env.js";
 import { assertWithinBudget, estimateTokens } from "../../utils/token-budget.js";
 import { assertCircuitClosed, recordSuccess, recordFailure } from "../../utils/circuit-breaker.js";
@@ -8,6 +8,43 @@ import { assertCircuitClosed, recordSuccess, recordFailure } from "../../utils/c
  * free tier while flash-lite-preview answers in ~1.6s. Override with GEMINI_MODEL.
  */
 export const GEMINI_MODEL_ID = env.GEMINI_MODEL;
+
+/**
+ * Lowest thinking level. Replies here are one to three spoken sentences; on
+ * flash-lite-preview LOW spent ~120 thought tokens on "how many states does
+ * the USA have", MINIMAL spends none.
+ */
+export const GEMINI_THINKING_CONFIG = { thinkingLevel: ThinkingLevel.MINIMAL };
+
+export const ASSISTANT_TIME_ZONE = "Europe/Stockholm";
+
+/**
+ * "Current date and time: Friday, 20 November 2026, 15:42 (Europe/Stockholm)".
+ * The model has no clock; without this it answered "today" with its training date.
+ */
+export function currentDateTimeLine(now: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: ASSISTANT_TIME_ZONE,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const get = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  return (
+    `Current date and time: ${get("weekday")}, ${get("day")} ${get("month")} ${get("year")}, ` +
+    `${get("hour")}:${get("minute")} (${ASSISTANT_TIME_ZONE})`
+  );
+}
+
+/** Prefix a system prompt with the current date line. Used for every Gemini request. */
+export function withCurrentDate(system: string, now: Date = new Date()): string {
+  return `${currentDateTimeLine(now)}\n\n${system}`;
+}
 
 const REQUEST_TIMEOUT_MS = 8_000;
 
@@ -43,8 +80,9 @@ export async function generateToolText(system: string, prompt: string): Promise<
       model: GEMINI_MODEL_ID,
       contents: prompt,
       config: {
-        systemInstruction: system,
+        systemInstruction: withCurrentDate(system),
         temperature: 0.2,
+        thinkingConfig: GEMINI_THINKING_CONFIG,
         abortSignal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       },
     });

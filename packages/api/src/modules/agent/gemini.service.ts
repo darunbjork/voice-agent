@@ -14,29 +14,38 @@ import {
   recordFailure,
   CircuitOpenError,
 } from "../../utils/circuit-breaker.js";
-import { GeminiAgentOutputSchema, type GeminiAgentOutputParsed } from "./gemini.schema.js";
-import { GEMINI_MODEL_ID } from "./gemini.tools.js";
+import {
+  GEMINI_AGENT_RESPONSE_JSON_SCHEMA,
+  GeminiAgentOutputSchema,
+  type GeminiAgentOutputParsed,
+} from "./gemini.schema.js";
+import { GEMINI_MODEL_ID, GEMINI_THINKING_CONFIG, withCurrentDate } from "./gemini.tools.js";
 import { AgentTurnAbortedError, isTurnAborted } from "../../utils/turn-abort.js";
 
 const MODEL_ID = GEMINI_MODEL_ID;
 
-const SYSTEM_PROMPT = `You are a voice assistant. You respond in JSON only.
-Classify the user's intent and return the correct card structure.
-Responses must be concise — they will be spoken aloud.
-Maximum reply length: 3 sentences.
-No markdown in reply text.
+export const SYSTEM_PROMPT = `You are a voice assistant. Your reply is spoken aloud: plain text, no markdown, at most 3 sentences.
+Return JSON with "reply", "intent" and "card".
 
-Respond ONLY with this JSON:
-{
-  "reply": "spoken response text — no markdown, max 3 sentences",
-  "intent": "weather" | "reminder" | "translate" | "summarize" | "help" | "fallback",
-  "card": { ... matching card type ... } | null
-}`;
+Pick exactly one intent:
+- "general": factual or everyday questions (facts, numbers, definitions, people, places, dates, "what day is it"). Answer directly and correctly in 1-2 short sentences. card: null.
+- "weather", "reminder", "translate", "summarize": the user asks for that task. Include the matching card only if you can fill every field, otherwise card: null.
+- "help": only when the user asks what you can do.
+- "fallback": only when the request is unintelligible. Never use it for a question you can answer.
+
+Use the current date and time above for anything relative to now (today, tomorrow, this year).
+card is null or exactly one of these shapes:
+{"type":"weather","icon","temp","desc","humidity","wind","location"}
+{"type":"reminder","note","time"}
+{"type":"translate","original","translated","fromLang","toLang"}
+{"type":"summary","points":[string],"source"}
+{"type":"help","commands":[{"name","description"}]}`;
 
 export class GeminiParseError extends Error {
   constructor(
     message: string,
     public readonly raw: string,
+    public readonly finishReason?: string,
   ) {
     super(message);
     this.name = "GeminiParseError";
@@ -73,18 +82,24 @@ export async function generateAgentOutput(
   log.info({ model: MODEL_ID, textLen: userText.length }, "Gemini request");
 
   let rawText: string;
+  let finishReason: string | undefined;
+  let usage: unknown;
   try {
     const response = await ai.models.generateContent({
       model: MODEL_ID,
       contents: userText,
       config: {
-        systemInstruction: SYSTEM_PROMPT,
+        systemInstruction: withCurrentDate(SYSTEM_PROMPT),
         temperature: 0.3,
         responseMimeType: "application/json",
+        responseJsonSchema: GEMINI_AGENT_RESPONSE_JSON_SCHEMA,
+        thinkingConfig: GEMINI_THINKING_CONFIG,
         abortSignal: signal,
       },
     });
     rawText = response.text ?? "";
+    finishReason = response.candidates?.[0]?.finishReason;
+    usage = response.usageMetadata;
   } catch (err) {
     if (signal?.aborted) {
       throw new AgentTurnAbortedError("Gemini request aborted");
@@ -98,43 +113,64 @@ export async function generateAgentOutput(
     throw new AgentTurnAbortedError("Gemini request aborted after response");
   }
 
+  log.info({ finishReason, usage }, "Gemini response");
+
   if (!rawText) {
     // Empty body is a provider-side anomaly.
     recordFailure("gemini");
-    throw new GeminiParseError("Empty response from Gemini", "");
+    log.error({ finishReason, usage }, "Gemini returned an empty response");
+    throw new GeminiParseError("Empty response from Gemini", "", finishReason);
   }
 
   // Parse errors below do NOT trip the breaker — they indicate a prompt /
   // schema problem, not provider unavailability.
-  const parsed = parseAndValidate(rawText, log);
+  const parsed = parseAndValidate(rawText, log, finishReason);
   recordSuccess("gemini");
   return parsed;
 }
 
-function parseAndValidate(raw: string, log: FastifyBaseLogger): GeminiAgentOutputParsed {
+export function parseAndValidate(
+  raw: string,
+  log: FastifyBaseLogger,
+  finishReason?: string,
+): GeminiAgentOutputParsed {
   let json: unknown;
   try {
     json = JSON.parse(raw);
   } catch {
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) {
-      log.error({ raw }, "Gemini returned non-JSON");
-      throw new GeminiParseError("Gemini returned non-JSON", raw);
+      log.error({ raw, finishReason }, "Gemini returned non-JSON");
+      throw new GeminiParseError("Gemini returned non-JSON", raw, finishReason);
     }
     try {
       json = JSON.parse(match[0]);
     } catch {
-      throw new GeminiParseError("Gemini returned unparseable JSON", raw);
+      log.error({ raw, finishReason }, "Gemini returned unparseable JSON");
+      throw new GeminiParseError("Gemini returned unparseable JSON", raw, finishReason);
     }
   }
 
   const parsed = GeminiAgentOutputSchema.safeParse(json);
-  if (!parsed.success) {
-    log.error({ issues: parsed.error.flatten(), raw }, "Gemini JSON failed Zod validation");
-    throw new GeminiParseError(`Zod validation failed: ${parsed.error.message}`, raw);
+  if (parsed.success) return parsed.data;
+
+  // A usable spoken reply with a malformed card: keep the answer, drop the card.
+  if (json !== null && typeof json === "object" && "card" in json) {
+    const withoutCard = GeminiAgentOutputSchema.safeParse({ ...json, card: null });
+    if (withoutCard.success) {
+      log.warn(
+        { issues: parsed.error.flatten(), raw, finishReason },
+        "Gemini card failed validation — dropping card, keeping reply",
+      );
+      return withoutCard.data;
+    }
   }
 
-  return parsed.data;
+  log.error(
+    { issues: parsed.error.flatten(), raw, finishReason },
+    "Gemini JSON failed Zod validation",
+  );
+  throw new GeminiParseError(`Zod validation failed: ${parsed.error.message}`, raw, finishReason);
 }
 
 export async function safeGenerateAgentOutput(
@@ -164,7 +200,7 @@ export async function safeGenerateAgentOutput(
       };
     }
     if (err instanceof GeminiParseError) {
-      log.warn({ err }, "Gemini parse failure — using fallback");
+      log.warn({ err, finishReason: err.finishReason }, "Gemini parse failure — using fallback");
       return {
         reply: "Sorry, I had trouble understanding that. Could you rephrase?",
         intent: "fallback",

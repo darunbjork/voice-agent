@@ -6,6 +6,7 @@ export const IntentTypeSchema = z.enum([
   "translate",
   "summarize",
   "help",
+  "general",
   "fallback",
 ]);
 
@@ -64,3 +65,51 @@ export const GeminiAgentOutputSchema = z.object({
 });
 
 export type GeminiAgentOutputParsed = z.infer<typeof GeminiAgentOutputSchema>;
+
+const str = { type: "string" } as const;
+const card = (type: string, props: Record<string, unknown>) => ({
+  type: "object",
+  properties: { type: { type: "string", enum: [type] }, ...props },
+  required: ["type", ...Object.keys(props)],
+});
+
+/**
+ * JSON Schema sent to Gemini as `responseJsonSchema` so structured output is
+ * constrained to the same shapes the Zod schema accepts. Without it the model
+ * invented card types ("translation", "text", "info") and every such reply
+ * failed validation.
+ */
+export const GEMINI_AGENT_RESPONSE_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    reply: { type: "string" },
+    intent: { type: "string", enum: IntentTypeSchema.options },
+    card: {
+      anyOf: [
+        { type: "null" },
+        card("weather", {
+          icon: str,
+          temp: str,
+          desc: str,
+          humidity: str,
+          wind: str,
+          location: str,
+        }),
+        card("reminder", { note: str, time: str }),
+        card("translate", { original: str, translated: str, fromLang: str, toLang: str }),
+        card("summary", { points: { type: "array", items: str }, source: str }),
+        card("help", {
+          commands: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { name: str, description: str },
+              required: ["name", "description"],
+            },
+          },
+        }),
+      ],
+    },
+  },
+  required: ["reply", "intent", "card"],
+} as const;
