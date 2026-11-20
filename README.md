@@ -1,10 +1,14 @@
 # Voice Agent
 
+[![CI](https://github.com/darunbjork/voice-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/darunbjork/voice-agent/actions/workflows/ci.yml)
+
+**Live demo:** https://voice-agent-nine-self.vercel.app
+
 Production-style voice agent: real-time streaming STT, structured LLM reasoning, streaming TTS, cost controls, and an Obsidian Forge UI.
 
 **Built with Deepgram · Gemini · ElevenLabs**
 
-> Default `VOICE_MOCK=true` — zero provider spend until you opt in.
+> Local default is `VOICE_MOCK=true` — zero provider spend until you opt in. The public demo runs live providers on free tiers (see below).
 
 ## Live demo
 
@@ -41,17 +45,30 @@ Production-style voice agent: real-time streaming STT, structured LLM reasoning,
 
 The mock column is what the LatencyHUD reports on a local run; the live column is the design target — **no production measurement exists yet**, and the HUD is the instrument that will produce one. Thresholds are `green < 500 ms`, `amber < 1000 ms`, `red ≥ 1000 ms`.
 
-## Cost controls
+## Free-tier demo
 
-- Provider caps set and documented in [`docs/cost.md`](docs/cost.md)
-- Daily caps (UTC day, all env-configurable), enforced on both the HTTP text route and the audio WebSocket:
-  - `DAILY_MAX_TOKENS` (50,000): Gemini turns get `429 budget_exceeded` (HTTP) / `budget_exceeded` error (WS); 80% alert via structured log
-  - `DAILY_MAX_TTS_CHARS` (650): ElevenLabs characters are reserved before each request; over the cap TTS is routed to Deepgram Aura instead
-  - `DAILY_MAX_STT_SECONDS` (3600): live Deepgram audio is metered; over the cap the client gets `stt_budget_exhausted` and falls back to text input
-- `402`/`429` (and ElevenLabs `quota_exceeded`) mean "budget exhausted": no circuit-breaker count, immediate fallback (ElevenLabs → Aura, Deepgram STT → text input)
-- Circuit breaker per provider (opens after 5 consecutive failures)
-- Pre-flight character/token budget before every Gemini or ElevenLabs call
-- All provider keys server-side only — see [`docs/security.md`](docs/security.md)
+The public demo runs on free provider tiers with no card attached, so when a quota runs out it degrades to a cheaper path instead of billing.
+
+**Pipeline:** Deepgram `nova-2` (STT) → Gemini `gemini-3.1-flash-lite-preview` (overridable via `GEMINI_MODEL`) → ElevenLabs `eleven_turbo_v2_5`, voice **Lily** (premade).
+
+**Daily caps** (UTC day; defaults, all env-configurable), enforced on both the HTTP text route and the audio WebSocket:
+
+| Variable                | Default | Over the cap                                                               |
+| ----------------------- | ------- | -------------------------------------------------------------------------- |
+| `DAILY_MAX_TOKENS`      | 50,000  | Gemini turn refused: `429 budget_exceeded` (HTTP) / `budget_exceeded` (WS) |
+| `DAILY_MAX_TTS_CHARS`   | 650     | TTS routed to Deepgram Aura                                                |
+| `DAILY_MAX_STT_SECONDS` | 3600    | `stt_budget_exhausted`, client falls back to text input                    |
+
+A structured-log alert fires at 80% of `DAILY_MAX_TOKENS`.
+
+**Fallbacks:**
+
+- ElevenLabs over the character cap, or returning `402` / `429` / `quota_exceeded` → Deepgram Aura voice
+- Deepgram STT over the seconds cap, or refused (`402` / `429`) → text input
+- Gemini failure (error, circuit open, unparseable output, over budget) → a fixed fallback reply
+- `402` / `429` mean "budget exhausted", not "provider broken": they skip the circuit breaker and fall back immediately
+
+Also: circuit breaker per provider (opens after 5 consecutive failures), per-call pre-flight token/character budgets, and all provider keys server-side only. Details and runbook in [`docs/cost.md`](docs/cost.md).
 
 ## Monorepo
 
@@ -110,6 +127,33 @@ Full explanation in [`docs/architecture.md`](docs/architecture.md).
 
 Local dev without admin: leave it blank. To try it: set it, restart `pnpm turbo dev`, then sign in with that value.
 
+## Configuration
+
+All variables are validated with Zod in [`packages/api/src/env.ts`](packages/api/src/env.ts). Names and defaults only — never commit values.
+
+| Variable                | Default                         | Notes                                              |
+| ----------------------- | ------------------------------- | -------------------------------------------------- |
+| `PORT`                  | `3001`                          |                                                    |
+| `NODE_ENV`              | `development`                   | `development` · `test` · `production`              |
+| `DATABASE_URL`          | —                               | required                                           |
+| `REDIS_URL`             | —                               | optional; in-memory counters without it            |
+| `VOICE_MOCK`            | `true`                          | `false` calls real providers                       |
+| `DEEPGRAM_LIVE`         | `false`                         | real STT while the rest stays mocked               |
+| `DEEPGRAM_API_KEY`      | —                               | secret                                             |
+| `ELEVENLABS_API_KEY`    | —                               | secret                                             |
+| `ELEVENLABS_VOICE_ID`   | `pFZP5JQG7iQjIQuC4Bku`          | premade "Lily", usable on the ElevenLabs free plan |
+| `GEMINI_API_KEY`        | —                               | secret                                             |
+| `GEMINI_MODEL`          | `gemini-3.1-flash-lite-preview` |                                                    |
+| `DAILY_MAX_TOKENS`      | `50000`                         | must be ≥ 1                                        |
+| `DAILY_MAX_TTS_CHARS`   | `650`                           | `0` disables ElevenLabs for the day                |
+| `DAILY_MAX_STT_SECONDS` | `3600`                          | `0` disables live STT for the day                  |
+| `JWT_SECRET`            | —                               | required, ≥ 32 chars                               |
+| `JWT_EXPIRES_IN`        | `7d`                            |                                                    |
+| `ADMIN_PASSWORD`        | —                               | optional, ≥ 12 chars; blank disables admin         |
+| `FRONTEND_URL`          | `http://localhost:5173`         |                                                    |
+| `CORS_ORIGINS`          | —                               | comma-separated allowlist for production           |
+| `SENTRY_DSN`            | —                               | optional                                           |
+
 ## Stack
 
 | Layer  | Choice                                                              |
@@ -145,9 +189,12 @@ pnpm format:check        # CI-equivalent
 - [`docs/portfolio.md`](docs/portfolio.md) — project card + repo copy for darun.dev
 - [`docs/issues-and-solutions.md`](docs/issues-and-solutions.md) — defect log with stable IDs
 
-## Deploy
+## Deployment
 
-See [`docs/deploy.md`](docs/deploy.md).
+- **API — Fly.io**, deployed manually with `fly deploy` (config in [`fly.toml`](fly.toml)). The `release_command` runs `prisma migrate deploy` before the new release goes live. Secrets (provider keys, `DATABASE_URL`, `JWT_SECRET`, `ADMIN_PASSWORD`, …) are set with `fly secrets set` / `fly secrets import`, never in `fly.toml`.
+- **Web — Vercel.**
+
+More detail in [`docs/deploy.md`](docs/deploy.md).
 
 ## Author
 

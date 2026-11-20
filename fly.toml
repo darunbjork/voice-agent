@@ -12,7 +12,7 @@ primary_region = "arn"
   NODE_ENV = "production"
   HOST = "0.0.0.0"
   PORT = "3001"
-  VOICE_MOCK = "true"
+  VOICE_MOCK = "false"
 
 [http_service]
   internal_port = 3001

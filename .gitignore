@@ -13,4 +13,5 @@ packages/api/.env
 *.md
 !/README.md
 !/docs/mock-mode-tool-limitations.md
+!/docs/cost.md
 RULES.md
