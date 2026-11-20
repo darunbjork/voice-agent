@@ -84,6 +84,12 @@ export function mockGeminiOutput(intent: IntentType = "weather"): GeminiAgentOut
           ],
         },
       };
+    case "general":
+      return {
+        reply: "The United States has 50 states.",
+        intent,
+        card: null,
+      };
     case "fallback":
       return {
         reply: "I am not sure I understood. Could you rephrase that?",

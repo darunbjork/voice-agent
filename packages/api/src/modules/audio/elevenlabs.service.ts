@@ -15,6 +15,7 @@ import {
   CircuitOpenError,
 } from "../../utils/circuit-breaker.js";
 import type { ServerAudioMessage } from "@voice-agent/shared-types";
+import { Pcm16Aligner } from "../../utils/pcm-align.js";
 
 export type TtsChunkHandler = (msg: ServerAudioMessage) => void;
 
@@ -207,9 +208,11 @@ function streamLiveTts(
 
   let elevenChunks = 0;
 
+  // Network reads can split a 16-bit sample; only forward whole samples.
+  const aligner = new Pcm16Aligner();
   const pushChunk = (value: Uint8Array<ArrayBuffer>): void => {
-    const audio = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-    onChunk({ type: "tts_chunk", audio, sequenceNum: sequence++ });
+    const audio = aligner.push(value);
+    if (audio) onChunk({ type: "tts_chunk", audio, sequenceNum: sequence++ });
   };
 
   const attemptElevenLabs = async (): Promise<Attempt> => {
@@ -321,7 +324,10 @@ function streamLiveTts(
           if (cancelled) return;
           recordSuccess("elevenlabs");
           emitDone();
-          log.info({ sessionId, chunks: sequence }, "Live TTS done (ElevenLabs)");
+          log.info(
+            { sessionId, chunks: sequence, oddChunks: aligner.oddChunks },
+            "Live TTS done (ElevenLabs)",
+          );
           return;
         }
 
@@ -353,12 +359,17 @@ function streamLiveTts(
       log.info({ sessionId }, "Using Deepgram Aura TTS (ElevenLabs unavailable)");
     }
 
+    // A partial ElevenLabs stream may have left half a sample behind.
+    aligner.reset();
     try {
       await attemptDeepgramAura();
       if (cancelled) return;
       recordSuccess("deepgram");
       emitDone();
-      log.info({ sessionId, chunks: sequence }, "Live TTS done (Deepgram Aura)");
+      log.info(
+        { sessionId, chunks: sequence, oddChunks: aligner.oddChunks },
+        "Live TTS done (Deepgram Aura)",
+      );
     } catch (err) {
       if (cancelled) return;
       if (err instanceof ProviderBudgetError) {

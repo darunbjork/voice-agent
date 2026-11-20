@@ -16,8 +16,23 @@ import {
 import { incrementUsage } from "../../utils/usage-tracker.js";
 import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared-types";
 
-const DEEPGRAM_WS_URL =
-  "wss://api.deepgram.com/v1/listen?model=nova-2&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&punctuate=true&endpointing=500&smart_format=true";
+const DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen";
+
+export const DEEPGRAM_LISTEN_PARAMS = new URLSearchParams({
+  model: "nova-2",
+  encoding: "linear16",
+  sample_rate: "16000",
+  channels: "1",
+  interim_results: "true",
+  punctuate: "true",
+  smart_format: "true",
+  // Silence that ends a finalised segment (is_final / speech_final).
+  endpointing: "500",
+  // UtteranceEnd after 1 s without words: pauses inside a sentence ("What does
+  // goodnight mean … in Swedish?") no longer split it into two turns.
+  utterance_end_ms: "1000",
+  vad_events: "true",
+});
 
 /** linear16 mono @ 16 kHz = 2 bytes × 16000 samples per second. */
 const PCM_BYTES_PER_SECOND = 32_000;
@@ -29,6 +44,13 @@ const MAX_PENDING_BYTES = 3 * PCM_BYTES_PER_SECOND;
 const IDLE_CLOSE_THRESHOLD_MS = 5_000;
 /** Wait before reconnecting after a failed connection. */
 const RECONNECT_BACKOFF_MS = 2_000;
+/** Deepgram drops a stream after ~10 s without audio; send KeepAlive well inside that. */
+const KEEPALIVE_INTERVAL_MS = 5_000;
+const KEEPALIVE_TICK_MS = 1_000;
+/** Stop keeping an unused stream alive after this; the next audio frame reconnects. */
+const KEEPALIVE_MAX_IDLE_MS = 60_000;
+/** Emit an utterance if UtteranceEnd never arrives (e.g. dropped message). */
+const UTTERANCE_FLUSH_FALLBACK_MS = 2_000;
 
 const TEXT_INPUT_FALLBACK_MESSAGE =
   "Speech recognition is temporarily unavailable. Use text input.";
@@ -38,7 +60,7 @@ export type TranscriptHandler = (msg: ServerAudioMessage) => void;
 export interface DeepgramProxyOptions {
   /** Live STT seconds already used today (from the usage tracker). */
   sttSecondsUsedToday?: number;
-  /** Deepgram listen endpoint override (tests). */
+  /** Deepgram listen endpoint (no query string) override, for tests. */
   endpoint?: string;
 }
 
@@ -206,6 +228,37 @@ function createLiveProxy(
   let unflushedBytes = 0;
   /** When audio was last forwarded upstream (or the connection started). */
   let lastAudioAt = 0;
+  /** When anything (audio or KeepAlive) was last sent upstream. */
+  let lastSentAt = 0;
+
+  // Utterance assembly: Deepgram finalises speech in segments (is_final);
+  // they are joined and emitted as one transcript_final on UtteranceEnd.
+  let segments: string[] = [];
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  let utterances = 0;
+
+  const clearFlushTimer = (): void => {
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = null;
+  };
+
+  const emitUtterance = (latencyMs: number): void => {
+    clearFlushTimer();
+    if (segments.length === 0) return;
+    const text = segments.join(" ");
+    segments = [];
+    utterances += 1;
+    onTranscript({ type: "transcript_final", text, latencyMs });
+  };
+
+  const armFlushFallback = (latencyMs: () => number): void => {
+    clearFlushTimer();
+    if (segments.length === 0) return;
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      if (!closed) emitUtterance(latencyMs());
+    }, UTTERANCE_FLUSH_FALLBACK_MS);
+  };
 
   const flushUsage = (final: boolean): void => {
     const seconds = final
@@ -227,6 +280,7 @@ function createLiveProxy(
   const forward = (socket: WebSocket, buf: Buffer): void => {
     socket.send(buf);
     lastAudioAt = Date.now();
+    lastSentAt = lastAudioAt;
     unflushedBytes += buf.byteLength;
     if (unflushedBytes >= STT_FLUSH_EVERY_SECONDS * PCM_BYTES_PER_SECOND) flushUsage(false);
   };
@@ -261,6 +315,10 @@ function createLiveProxy(
     const attempt = connections;
     const startTime = Date.now();
     lastAudioAt = startTime;
+    lastSentAt = startTime;
+    let keepAlive: ReturnType<typeof setInterval> | null = null;
+    let keepAlives = 0;
+    const latency = (): number => Date.now() - startTime;
     let results = 0;
     let emptyResults = 0;
     let interims = 0;
@@ -268,7 +326,7 @@ function createLiveProxy(
     /** This connection already reported/handled its own end. */
     let settled = false;
 
-    const socket = new WebSocket(endpoint, {
+    const socket = new WebSocket(`${endpoint}?${DEEPGRAM_LISTEN_PARAMS.toString()}`, {
       headers: {
         Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
       },
@@ -314,6 +372,18 @@ function createLiveProxy(
       }
       for (const buf of pending.splice(0)) forward(socket, buf);
       pendingBytes = 0;
+
+      // Mic paused: keep the stream open so the next words are not lost to
+      // Deepgram's idle timeout. Long idles are let go (reconnect on demand).
+      keepAlive = setInterval(() => {
+        if (socket.readyState !== WebSocket.OPEN) return;
+        const now = Date.now();
+        if (now - lastAudioAt > KEEPALIVE_MAX_IDLE_MS) return;
+        if (now - lastSentAt < KEEPALIVE_INTERVAL_MS) return;
+        socket.send(JSON.stringify({ type: "KeepAlive" }));
+        lastSentAt = now;
+        keepAlives += 1;
+      }, KEEPALIVE_TICK_MS);
     });
 
     socket.on("message", (data: WebSocket.RawData) => {
@@ -327,6 +397,11 @@ function createLiveProxy(
             alternatives?: Array<{ transcript?: string }>;
           };
         };
+
+        if (msg.type === "UtteranceEnd") {
+          emitUtterance(latency());
+          return;
+        }
 
         if (msg.type !== "Results") return;
 
@@ -344,20 +419,19 @@ function createLiveProxy(
           return;
         }
 
-        if (msg.is_final || msg.speech_final) {
+        if (msg.is_final) {
+          // A finalised segment, not necessarily the end of the utterance.
           finals += 1;
-          onTranscript({
-            type: "transcript_final",
-            text: transcript,
-            latencyMs: Date.now() - startTime,
-          });
+          segments.push(transcript);
+          onTranscript({ type: "transcript_interim", text: segments.join(" ") });
         } else {
           interims += 1;
           onTranscript({
             type: "transcript_interim",
-            text: transcript,
+            text: [...segments, transcript].join(" "),
           });
         }
+        armFlushFallback(latency);
       } catch (err) {
         log.error({ err, sessionId }, "Failed to parse Deepgram message");
       }
@@ -371,11 +445,25 @@ function createLiveProxy(
     });
 
     socket.on("close", (code: number) => {
+      if (keepAlive) clearInterval(keepAlive);
+      // Speech finalised just before Deepgram closed still counts as a turn.
+      if (!closed) emitUtterance(latency());
       flushUsage(true);
       if (dg === socket) dg = null;
       const idleMs = Date.now() - lastAudioAt;
       log.info(
-        { sessionId, attempt, code, idleMs, results, emptyResults, interims, finals },
+        {
+          sessionId,
+          attempt,
+          code,
+          idleMs,
+          results,
+          emptyResults,
+          interims,
+          finals,
+          utterances,
+          keepAlives,
+        },
         "Deepgram WebSocket closed",
       );
       if (settled || closed || budgetCutoff) return;
@@ -394,6 +482,8 @@ function createLiveProxy(
   const close = (): void => {
     if (closed) return;
     closed = true;
+    clearFlushTimer();
+    segments = [];
     pending.length = 0;
     pendingBytes = 0;
     flushUsage(true);

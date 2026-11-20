@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { computeRms } from "../lib/audio-utils.js";
 import { computePlaybackProgress } from "../lib/playback.js";
 import { prefersReducedMotion } from "../lib/motion.js";
+import { Pcm16Aligner } from "../lib/pcm-align.js";
 
 export type TtsPlayerStatus = "idle" | "playing" | "cancelled" | "error";
 
@@ -39,6 +40,7 @@ export function useTTSPlayer(options: UseTTSPlayerOptions = {}) {
   const nextStartTimeRef = useRef(0);
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const cancelledRef = useRef(false);
+  const alignerRef = useRef(new Pcm16Aligner());
   const isDoneSignaledRef = useRef(false);
   const onDoneRef = useRef(onDone);
   const onCancelRef = useRef(onCancel);
@@ -103,12 +105,16 @@ export function useTTSPlayer(options: UseTTSPlayerOptions = {}) {
       if (cancelledRef.current) return;
       if (pcm.byteLength === 0) return;
 
+      // Whole 16-bit samples only: an odd chunk would shift every later sample.
+      const aligned = alignerRef.current.push(new Uint8Array(pcm));
+      if (!aligned) return;
+
       try {
         const ctx = await ensureContext();
 
         if (cancelledRef.current) return;
 
-        const audioBuffer = pcm16ToAudioBuffer(ctx, pcm, sampleRate);
+        const audioBuffer = pcm16ToAudioBuffer(ctx, aligned, sampleRate);
         const source = ctx.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(analyserRef.current ?? ctx.destination);
@@ -160,6 +166,7 @@ export function useTTSPlayer(options: UseTTSPlayerOptions = {}) {
       }
     }
     activeSourcesRef.current = [];
+    alignerRef.current.reset();
     nextStartTimeRef.current = 0;
     sessionStartRef.current = null;
     sessionEndRef.current = null;
@@ -171,6 +178,7 @@ export function useTTSPlayer(options: UseTTSPlayerOptions = {}) {
   const prepare = useCallback((): void => {
     cancelledRef.current = false;
     isDoneSignaledRef.current = false;
+    alignerRef.current.reset();
     nextStartTimeRef.current = 0;
     sessionStartRef.current = null;
     sessionEndRef.current = null;

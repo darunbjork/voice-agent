@@ -68,6 +68,10 @@ async function rejectingServer(status: number): Promise<string> {
 type FakeDeepgram = {
   url: string;
   received: () => number;
+  /** Text (JSON) control messages received, e.g. KeepAlive. */
+  texts: () => string[];
+  /** Request path + query of the most recent upgrade. */
+  lastPath: () => string;
   connections: () => number;
   /** Most recent upstream socket, server side. */
   last: () => ServerSocket | undefined;
@@ -76,19 +80,25 @@ type FakeDeepgram = {
 /** Fake Deepgram that accepts connections and counts audio bytes it receives. */
 async function acceptingServer(): Promise<FakeDeepgram> {
   let bytes = 0;
+  let path = "";
+  const texts: string[] = [];
   const sockets: ServerSocket[] = [];
   server = createServer();
   wss = new WebSocketServer({ server });
-  wss.on("connection", (ws) => {
+  wss.on("connection", (ws, req) => {
     sockets.push(ws);
+    path = req.url ?? "";
     ws.on("message", (data, isBinary) => {
       if (isBinary) bytes += (data as Buffer).byteLength;
+      else texts.push(data.toString());
     });
   });
   await new Promise<void>((r) => server!.listen(0, "127.0.0.1", () => r()));
   return {
     url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}`,
     received: () => bytes,
+    texts: () => texts,
+    lastPath: () => path,
     connections: () => sockets.length,
     last: () => sockets.at(-1),
   };
@@ -300,5 +310,144 @@ describe("lazy connect and idle reconnect", () => {
     await sleep(50);
     expect(fake.connections()).toBe(1);
     expect(errorCodes(msgs)).toEqual(["deepgram_circuit_open"]);
+  });
+});
+
+describe("KeepAlive while the mic is paused", () => {
+  const keepAlives = (fake: FakeDeepgram): number =>
+    fake.texts().filter((t) => t.includes('"KeepAlive"')).length;
+
+  it("sends KeepAlive after ~5 s without audio, and not while audio flows", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const fake = await acceptingServer();
+    open(fake.url);
+    proxy!.sendAudio(new ArrayBuffer(320));
+    await waitUntil(() => fake.received() === 320);
+
+    // Audio every second for 6 s → no KeepAlive needed.
+    for (let i = 0; i < 6; i++) {
+      vi.advanceTimersByTime(1000);
+      proxy!.sendAudio(new ArrayBuffer(320));
+    }
+    await sleep(30);
+    expect(keepAlives(fake)).toBe(0);
+
+    // Mic paused for 12 s → KeepAlive roughly every 5 s.
+    vi.advanceTimersByTime(12_000);
+    await waitUntil(() => keepAlives(fake) === 2);
+    expect(JSON.parse(fake.texts()[0]!)).toEqual({ type: "KeepAlive" });
+  });
+
+  it("stops keeping an unused stream alive after 60 s idle", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const fake = await acceptingServer();
+    open(fake.url);
+    proxy!.sendAudio(new ArrayBuffer(320));
+    await waitUntil(() => fake.received() === 320);
+
+    vi.advanceTimersByTime(60_000);
+    await sleep(30);
+    const atLimit = keepAlives(fake);
+    expect(atLimit).toBeGreaterThanOrEqual(10);
+
+    vi.advanceTimersByTime(30_000);
+    await sleep(30);
+    expect(keepAlives(fake)).toBe(atLimit);
+  });
+});
+
+describe("utterance assembly", () => {
+  const results = (transcript: string, isFinal: boolean, speechFinal = false): string =>
+    JSON.stringify({
+      type: "Results",
+      is_final: isFinal,
+      speech_final: speechFinal,
+      channel: { alternatives: [{ transcript }] },
+    });
+
+  async function connected(): Promise<{ fake: FakeDeepgram; msgs: ServerAudioMessage[] }> {
+    const fake = await acceptingServer();
+    const msgs = open(fake.url);
+    proxy!.sendAudio(new ArrayBuffer(320));
+    await waitUntil(() => fake.received() === 320);
+    return { fake, msgs };
+  }
+
+  const finals = (msgs: ServerAudioMessage[]): string[] =>
+    msgs.flatMap((m) => (m.type === "transcript_final" ? [m.text] : []));
+  const interims = (msgs: ServerAudioMessage[]): string[] =>
+    msgs.flatMap((m) => (m.type === "transcript_interim" ? [m.text] : []));
+
+  it("asks Deepgram for UtteranceEnd after 1 s (utterance_end_ms=1000, vad_events) and keeps endpointing", async () => {
+    const { fake } = await connected();
+    const q = new URL(fake.lastPath(), "ws://x").searchParams;
+    expect(q.get("utterance_end_ms")).toBe("1000");
+    expect(q.get("vad_events")).toBe("true");
+    expect(q.get("interim_results")).toBe("true");
+    expect(q.get("endpointing")).toBe("500");
+  });
+
+  it("joins finalised segments split by a pause into one turn on UtteranceEnd", async () => {
+    const { fake, msgs } = await connected();
+    const dg = fake.last()!;
+    dg.send(results("What does goodnight mean", true, true));
+    dg.send(results("in", false));
+    dg.send(results("in Swedish?", true, true));
+    await sleep(50);
+    expect(finals(msgs)).toEqual([]);
+    expect(interims(msgs)).toEqual([
+      "What does goodnight mean",
+      "What does goodnight mean in",
+      "What does goodnight mean in Swedish?",
+    ]);
+
+    dg.send(JSON.stringify({ type: "UtteranceEnd", last_word_end: 3.1 }));
+    await waitUntil(() => finals(msgs).length === 1);
+    expect(finals(msgs)).toEqual(["What does goodnight mean in Swedish?"]);
+  });
+
+  it("starts a fresh utterance after each UtteranceEnd", async () => {
+    const { fake, msgs } = await connected();
+    const dg = fake.last()!;
+    dg.send(results("Hello", true));
+    dg.send(JSON.stringify({ type: "UtteranceEnd" }));
+    dg.send(results("How are you?", true));
+    dg.send(JSON.stringify({ type: "UtteranceEnd" }));
+    await waitUntil(() => finals(msgs).length === 2);
+    expect(finals(msgs)).toEqual(["Hello", "How are you?"]);
+  });
+
+  it("ignores UtteranceEnd with nothing finalised", async () => {
+    const { fake, msgs } = await connected();
+    fake.last()!.send(JSON.stringify({ type: "UtteranceEnd" }));
+    await sleep(50);
+    expect(finals(msgs)).toEqual([]);
+  });
+
+  it("emits pending segments if UtteranceEnd never arrives", async () => {
+    const { fake, msgs } = await connected();
+    fake.last()!.send(results("What time is it", true, true));
+    await sleep(1500);
+    expect(finals(msgs)).toEqual([]);
+    await waitUntil(() => finals(msgs).length === 1, 2000);
+    expect(finals(msgs)).toEqual(["What time is it"]);
+  });
+
+  it("emits pending segments when Deepgram closes the stream", async () => {
+    const { fake, msgs } = await connected();
+    fake.last()!.send(results("Remind me to call mum", true));
+    await sleep(30);
+    fake.last()!.close(1000);
+    await waitUntil(() => finals(msgs).length === 1);
+    expect(finals(msgs)).toEqual(["Remind me to call mum"]);
+  });
+
+  it("drops pending segments when the client ends the session", async () => {
+    const { fake, msgs } = await connected();
+    fake.last()!.send(results("half a sentence", true));
+    await sleep(30);
+    proxy!.close();
+    await sleep(2200);
+    expect(finals(msgs)).toEqual([]);
   });
 });
