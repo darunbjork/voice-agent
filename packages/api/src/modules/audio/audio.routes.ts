@@ -18,6 +18,14 @@ import { checkDailyTokenBudget } from "../../middleware/cost.guard.js";
 import { getDailyUsage } from "../../utils/usage-tracker.js";
 
 const MAX_PCM_CHUNK_BYTES = 4096;
+export const turnLimits = {
+  /** Hard ceiling for one turn; the Gemini call itself gives up well before this. */
+  timeoutMs: 25_000,
+  /** Turns waiting behind the active one; beyond this new ones are refused visibly. */
+  maxQueued: 3,
+};
+/** History used for "summarize everything we discussed". */
+const SUMMARY_HISTORY_TURNS = 50;
 
 export async function audioRoutes(
   app: FastifyInstance,
@@ -54,8 +62,9 @@ export async function audioRoutes(
     const runTurn = async (
       msg: Extract<ServerAudioMessage, { type: "transcript_final" }>,
       signal: AbortSignal,
+      sendTurn: (m: ServerAudioMessage) => void,
     ): Promise<void> => {
-      sendSafe({ type: "agent_thinking" });
+      sendTurn({ type: "agent_thinking" });
 
       let turnIndex = 0;
       try {
@@ -78,7 +87,7 @@ export async function audioRoutes(
       if (signal.aborted) return;
       if (exceeded) {
         log.warn({ limit: exceeded.error.limit }, "Daily token budget reached — turn skipped");
-        sendSafe({ type: "error", code: "budget_exceeded", message: exceeded.error.message });
+        sendTurn({ type: "error", code: "budget_exceeded", message: exceeded.error.message });
         return;
       }
 
@@ -92,6 +101,8 @@ export async function audioRoutes(
             turnIndex,
             sttLatencyMs: msg.latencyMs,
             context,
+            loadHistory: () =>
+              getRecentContext(request.server.prisma, dbSessionId, SUMMARY_HISTORY_TURNS),
             signal,
           },
           log,
@@ -104,7 +115,7 @@ export async function audioRoutes(
           return;
         }
         log.error({ err }, "Agent pipeline failed");
-        sendSafe({
+        sendTurn({
           type: "error",
           code: "agent_turn_failed",
           message: err instanceof Error ? err.message : "Agent turn failed",
@@ -116,7 +127,7 @@ export async function audioRoutes(
 
       log.info({ pipelineMs, intent: reply.intent, turnIndex }, "WS agent pipeline done");
 
-      sendSafe({ type: "agent_response", reply });
+      sendTurn({ type: "agent_response", reply });
 
       void appendTurn(
         request.server.prisma,
@@ -135,24 +146,78 @@ export async function audioRoutes(
       }
     };
 
+    /**
+     * Runs one turn and guarantees it ends in an agent_response or a visible
+     * error. Live, turns whose Gemini call hung were later aborted by the next
+     * utterance and their reply suppressed: the user heard nothing.
+     */
     const runAgentTurn = async (
       msg: Extract<ServerAudioMessage, { type: "transcript_final" }>,
     ): Promise<void> => {
       const controller = new AbortController();
       turnAbort = controller;
+      const timer = setTimeout(() => controller.abort("turn_timeout"), turnLimits.timeoutMs);
+      let answered = false;
+      const sendTurn = (m: ServerAudioMessage): void => {
+        if (m.type === "agent_response" || m.type === "error") answered = true;
+        sendSafe(m);
+      };
       try {
-        await runTurn(msg, controller.signal);
+        await runTurn(msg, controller.signal, sendTurn);
       } catch (err) {
-        if (!isTurnAborted(err, controller.signal)) throw err;
+        if (!isTurnAborted(err, controller.signal)) {
+          log.error({ err }, "Agent turn crashed");
+        }
       } finally {
+        clearTimeout(timer);
         if (turnAbort === controller) turnAbort = null;
+        const reason = controller.signal.aborted ? String(controller.signal.reason) : null;
+        const sessionGone = reason === "socket_closed" || reason === "socket_error";
+        if (!answered && !sessionGone) {
+          log.warn(
+            { reason, textPreview: msg.text.slice(0, 80) },
+            "Turn ended without a reply — sending a visible error",
+          );
+          sendSafe(
+            reason === "turn_timeout"
+              ? {
+                  type: "error",
+                  code: "turn_timeout",
+                  message: "That took too long to answer. Please ask again.",
+                }
+              : {
+                  type: "error",
+                  code: "turn_failed",
+                  message: "I could not answer that. Please try again.",
+                },
+          );
+        }
       }
     };
 
+    // Turns run one at a time, in order. A new utterance no longer aborts the
+    // one being answered, so every question gets its own reply.
+    let turnChain: Promise<void> = Promise.resolve();
+    let queuedTurns = 0;
+
     const onFinalTranscript = (msg: ServerAudioMessage): void => {
       if (msg.type !== "transcript_final") return;
-      abortActiveTurn("superseded_by_new_utterance");
-      void runAgentTurn(msg);
+      if (queuedTurns > turnLimits.maxQueued) {
+        log.warn({ queuedTurns }, "Turn queue full — refusing utterance");
+        sendSafe({
+          type: "error",
+          code: "turn_queue_full",
+          message: "I am still answering your earlier questions. Please wait a moment.",
+        });
+        return;
+      }
+      queuedTurns += 1;
+      if (queuedTurns > 1) log.info({ waiting: queuedTurns - 1 }, "Turn queued");
+      turnChain = turnChain
+        .then(() => (sessionAbort.signal.aborted ? undefined : runAgentTurn(msg)))
+        .finally(() => {
+          queuedTurns -= 1;
+        });
     };
 
     const setupDone = (async (): Promise<void> => {
@@ -237,7 +302,8 @@ export async function audioRoutes(
         const msg = JSON.parse(raw.toString()) as ClientAudioMessage;
 
         if (msg.type === "barge_in") {
-          abortActiveTurn("barge_in");
+          // Stop the agent talking. A turn still being answered is kept so
+          // the user's question still gets its (visible) reply.
           currentTts?.cancel();
           currentTts = null;
         }

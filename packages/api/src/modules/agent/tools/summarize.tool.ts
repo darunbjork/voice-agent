@@ -23,7 +23,15 @@ function stripCommandPrefix(text: string): string {
     .trim();
 }
 
+const CONVERSATION_SYSTEM_PROMPT =
+  "You summarize a conversation between a user and a voice assistant into its key points. " +
+  "Cover what the user asked and what they learned. " +
+  "Reply with at most 5 lines, each line one point. " +
+  "No numbering, no bullet characters, no preamble, no commentary.";
+
 export async function summarizeTool(input: SummarizeToolInput): Promise<SummarizeToolResult> {
+  if (input.slots.scope === "conversation") return summarizeConversation(input.userText);
+
   const cleaned = stripCommandPrefix(input.userText.trim());
 
   let points: string[] | null = null;
@@ -47,10 +55,37 @@ export async function summarizeTool(input: SummarizeToolInput): Promise<Summariz
   };
 }
 
-async function liveSummarize(text: string): Promise<string[] | null> {
+/** `transcript` is "User: …\nAgent: …" lines from the session. */
+async function summarizeConversation(transcript: string): Promise<SummarizeToolResult> {
+  let points: string[] | null = null;
+  if (!env.VOICE_MOCK) {
+    points = await liveSummarize(transcript, CONVERSATION_SYSTEM_PROMPT);
+  }
+  // Offline: list what the user asked, newest last.
+  const finalPoints =
+    points ??
+    transcript
+      .split("\n")
+      .filter((l) => l.startsWith("User: "))
+      .map((l) => `You asked: ${l.slice("User: ".length)}`)
+      .slice(-5);
+
+  return {
+    card: { type: "summary", points: finalPoints, source: "this conversation" },
+    replyHint:
+      finalPoints.length === 1
+        ? `So far: ${finalPoints[0]}`
+        : `Here are ${finalPoints.length} key points from our conversation.`,
+  };
+}
+
+async function liveSummarize(
+  text: string,
+  system: string = SUMMARIZE_SYSTEM_PROMPT,
+): Promise<string[] | null> {
   if (!text) return null;
   try {
-    const out = await generateToolText(SUMMARIZE_SYSTEM_PROMPT, text);
+    const out = await generateToolText(system, text);
     const lines = out
       .split("\n")
       .map((line) => line.replace(/^\s*(?:[-*•–]|\d+[.)])\s*/, "").trim())

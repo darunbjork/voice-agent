@@ -1,4 +1,5 @@
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+import { GeminiUnavailableError, generateWithFallback } from "./gemini.call.js";
 import { env } from "../../env.js";
 import { assertWithinBudget, estimateTokens } from "../../utils/token-budget.js";
 import { assertCircuitClosed, recordSuccess, recordFailure } from "../../utils/circuit-breaker.js";
@@ -46,7 +47,9 @@ export function withCurrentDate(system: string, now: Date = new Date()): string 
   return `${currentDateTimeLine(now)}\n\n${system}`;
 }
 
-const REQUEST_TIMEOUT_MS = 8_000;
+/** Tools have a deterministic fallback, so give up on Gemini sooner. */
+const TOOL_ATTEMPT_TIMEOUT_MS = 6_000;
+const TOOL_HEDGE_AFTER_MS = 2_500;
 
 export class ToolTextError extends Error {
   constructor(message: string) {
@@ -76,19 +79,21 @@ export async function generateToolText(system: string, prompt: string): Promise<
 
   let rawText: string;
   try {
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL_ID,
-      contents: prompt,
-      config: {
-        systemInstruction: withCurrentDate(system),
-        temperature: 0.2,
-        thinkingConfig: GEMINI_THINKING_CONFIG,
-        abortSignal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    const { response } = await generateWithFallback(
+      ai,
+      {
+        contents: prompt,
+        config: {
+          systemInstruction: withCurrentDate(system),
+          temperature: 0.2,
+          thinkingConfig: GEMINI_THINKING_CONFIG,
+        },
       },
-    });
+      { attemptTimeoutMs: TOOL_ATTEMPT_TIMEOUT_MS, hedgeAfterMs: TOOL_HEDGE_AFTER_MS },
+    );
     rawText = (response.text ?? "").trim();
   } catch (err) {
-    recordFailure("gemini");
+    if (!(err instanceof GeminiUnavailableError && err.quotaOnly)) recordFailure("gemini");
     throw err instanceof Error ? err : new ToolTextError("Gemini request failed");
   }
 

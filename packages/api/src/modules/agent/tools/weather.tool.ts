@@ -1,4 +1,5 @@
 import type { WeatherCard } from "@voice-agent/shared-types";
+import { CAPITALS, cleanLocation, extractWeatherLocation } from "../location.js";
 
 export type WeatherToolInput = {
   userText: string;
@@ -6,27 +7,47 @@ export type WeatherToolInput = {
 };
 
 export type WeatherToolResult = {
-  card: WeatherCard;
+  /** Null when we need the user to name a city first. */
+  card: WeatherCard | null;
   replyHint: string;
 };
 
 const FETCH_TIMEOUT_MS = 4000;
 
 export async function weatherTool(input: WeatherToolInput): Promise<WeatherToolResult> {
-  const location = input.slots.location?.trim() || extractLocation(input.userText) || "Stockholm";
+  const location =
+    cleanLocation(input.slots.location ?? "") ||
+    extractWeatherLocation(input.userText) ||
+    "Stockholm";
 
   try {
-    const geo = await geocode(location);
+    let geo = await geocode(location);
     if (!geo) {
       return {
         card: unavailableCard(location),
         replyHint: `I could not find a place called ${location}.`,
       };
     }
+
+    // A whole country has no single weather: use its capital, or ask.
+    let note = "";
+    if (geo.isCountry) {
+      const capital = CAPITALS[geo.countryCode];
+      const capitalGeo = capital ? await geocode(capital, geo.countryCode) : null;
+      if (!capitalGeo) {
+        return {
+          card: null,
+          replyHint: `${geo.name} is a big place. Which city in ${geo.name} would you like the weather for?`,
+        };
+      }
+      note = `For ${geo.name} I am using the capital, ${capitalGeo.name}. `;
+      geo = capitalGeo;
+    }
+
     const card = await fetchCurrentWeather(geo);
     return {
       card,
-      replyHint: `It is ${card.temp} and ${card.desc.toLowerCase()} in ${card.location}.`,
+      replyHint: `${note}It is ${card.temp} and ${card.desc.toLowerCase()} in ${card.location}.`,
     };
   } catch {
     const card = offlineCard(location);
@@ -68,20 +89,26 @@ function unavailableCard(location: string): WeatherCard {
 type GeocodeResult = {
   name: string;
   country: string;
+  countryCode: string;
+  /** GeoNames PCL* feature (a country, not a city). */
+  isCountry: boolean;
   latitude: number;
   longitude: number;
 };
 
-async function geocode(query: string): Promise<GeocodeResult | null> {
+async function geocode(query: string, countryCode?: string): Promise<GeocodeResult | null> {
   const url =
     "https://geocoding-api.open-meteo.com/v1/search" +
-    `?name=${encodeURIComponent(query)}&count=1&language=en&format=json`;
+    `?name=${encodeURIComponent(query)}&count=1&language=en&format=json` +
+    (countryCode ? `&countryCode=${countryCode}` : "");
   const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`Open-Meteo geocoding ${res.status}`);
   const data = (await res.json()) as {
     results?: Array<{
       name: string;
       country?: string;
+      country_code?: string;
+      feature_code?: string;
       latitude: number;
       longitude: number;
     }>;
@@ -91,6 +118,8 @@ async function geocode(query: string): Promise<GeocodeResult | null> {
   return {
     name: hit.name,
     country: hit.country ?? "",
+    countryCode: (hit.country_code ?? "").toUpperCase(),
+    isCountry: (hit.feature_code ?? "").startsWith("PCL"),
     latitude: hit.latitude,
     longitude: hit.longitude,
   };
@@ -141,9 +170,4 @@ export function mapWeatherCode(code: number): { icon: string; desc: string } {
   if (code === 95) return { icon: "⛈️", desc: "Thunderstorm" };
   if (code === 96 || code === 99) return { icon: "⛈️", desc: "Thunderstorm with hail" };
   return { icon: "🌡️", desc: "Unknown" };
-}
-
-function extractLocation(text: string): string | null {
-  const m = text.match(/\b(?:in|for|at)\s+([A-Za-z][A-Za-z\s-]{1,40})(?:\?|$)/i);
-  return m?.[1]?.trim() ?? null;
 }

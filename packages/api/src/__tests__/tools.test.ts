@@ -14,14 +14,14 @@ describe("tool handlers", () => {
       userText: "What is the weather in Berlin?",
       slots: { location: "Berlin" },
     });
-    expect(r.card.type).toBe("weather");
-    expect(r.card.location).toBe("Berlin");
+    expect(r.card!.type).toBe("weather");
+    expect(r.card!.location).toBe("Berlin");
     expect(r.replyHint.toLowerCase()).toContain("berlin");
   });
 
   it("weather falls back to Stockholm when no slot", async () => {
     const r = await weatherTool({ userText: "weather?", slots: {} });
-    expect(r.card.location).toBe("Stockholm");
+    expect(r.card!.location).toBe("Stockholm");
   });
 
   it("fetches live Open-Meteo weather even when VOICE_MOCK=true", async () => {
@@ -34,7 +34,7 @@ describe("tool handlers", () => {
       });
       expect(spy.mock.calls.some(([input]) => String(input).includes("open-meteo.com"))).toBe(true);
       // The local stub answers Overcast; the old fixture always said Partly cloudy.
-      expect(r.card.desc).toBe("Overcast");
+      expect(r.card!.desc).toBe("Overcast");
     } finally {
       spy.mockRestore();
     }

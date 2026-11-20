@@ -18,21 +18,36 @@ import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared
 
 const DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen";
 
-export const DEEPGRAM_LISTEN_PARAMS = new URLSearchParams({
-  model: "nova-2",
-  encoding: "linear16",
-  sample_rate: "16000",
-  channels: "1",
-  interim_results: "true",
-  punctuate: "true",
-  smart_format: "true",
-  // Silence that ends a finalised segment (is_final / speech_final).
-  endpointing: "500",
-  // UtteranceEnd after 1 s without words: pauses inside a sentence ("What does
-  // goodnight mean … in Swedish?") no longer split it into two turns.
-  utterance_end_ms: "1000",
-  vad_events: "true",
-});
+/**
+ * Query for the live listen socket, read from env at connect time.
+ * nova-3 gets `keyterm` prompting for tech vocabulary (verified live: "agentic
+ * AI and RAG", "Which LLM does this API use", "Deepgram" transcribed exactly,
+ * where nova-2 heard "agentic dot ai and RAC", "hell on them", "deep in").
+ * nova-2 does not support keyterm, so it gets boosted `keywords` instead.
+ */
+export function deepgramListenParams(): URLSearchParams {
+  const params = new URLSearchParams({
+    model: env.DEEPGRAM_MODEL,
+    encoding: "linear16",
+    sample_rate: "16000",
+    channels: "1",
+    interim_results: "true",
+    punctuate: "true",
+    smart_format: "true",
+    // Silence that ends a finalised segment (is_final / speech_final).
+    endpointing: "500",
+    // UtteranceEnd after 1 s without words: pauses inside a sentence ("What does
+    // goodnight mean … in Swedish?") no longer split it into two turns.
+    utterance_end_ms: "1000",
+    vad_events: "true",
+  });
+  const nova3 = env.DEEPGRAM_MODEL.startsWith("nova-3");
+  for (const term of env.DEEPGRAM_KEYTERMS) {
+    if (nova3) params.append("keyterm", term);
+    else params.append("keywords", `${term}:2`);
+  }
+  return params;
+}
 
 /** linear16 mono @ 16 kHz = 2 bytes × 16000 samples per second. */
 const PCM_BYTES_PER_SECOND = 32_000;
@@ -326,7 +341,7 @@ function createLiveProxy(
     /** This connection already reported/handled its own end. */
     let settled = false;
 
-    const socket = new WebSocket(`${endpoint}?${DEEPGRAM_LISTEN_PARAMS.toString()}`, {
+    const socket = new WebSocket(`${endpoint}?${deepgramListenParams().toString()}`, {
       headers: {
         Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
       },

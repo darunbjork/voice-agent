@@ -19,10 +19,9 @@ import {
   GeminiAgentOutputSchema,
   type GeminiAgentOutputParsed,
 } from "./gemini.schema.js";
-import { GEMINI_MODEL_ID, GEMINI_THINKING_CONFIG, withCurrentDate } from "./gemini.tools.js";
+import { GEMINI_THINKING_CONFIG, withCurrentDate } from "./gemini.tools.js";
+import { GeminiUnavailableError, generateWithFallback, geminiModels } from "./gemini.call.js";
 import { AgentTurnAbortedError, isTurnAborted } from "../../utils/turn-abort.js";
-
-const MODEL_ID = GEMINI_MODEL_ID;
 
 export const SYSTEM_PROMPT = `You are a voice assistant. Your reply is spoken aloud: plain text, no markdown, at most 3 sentences.
 Return JSON with "reply", "intent" and "card".
@@ -32,6 +31,9 @@ Pick exactly one intent:
 - "weather", "reminder", "translate", "summarize": the user asks for that task. Include the matching card only if you can fill every field, otherwise card: null.
 - "help": only when the user asks what you can do.
 - "fallback": only when the request is unintelligible. Never use it for a question you can answer.
+
+This app's features: weather (current weather for a city), reminders (saved only when the user says "remind me to ..."), translation of short phrases, and summaries (of what the user says or of this conversation).
+A question ABOUT a feature ("what does reminder do?", "how does translation work?") is "help": explain the feature, do not perform it, card: null.
 
 Use the current date and time above for anything relative to now (today, tomorrow, this year).
 card is null or exactly one of these shapes:
@@ -79,24 +81,28 @@ export async function generateAgentOutput(
 
   const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
-  log.info({ model: MODEL_ID, textLen: userText.length }, "Gemini request");
+  log.info({ models: geminiModels(), textLen: userText.length }, "Gemini request");
 
   let rawText: string;
   let finishReason: string | undefined;
   let usage: unknown;
+  let answeredBy: string | undefined;
   try {
-    const response = await ai.models.generateContent({
-      model: MODEL_ID,
-      contents: userText,
-      config: {
-        systemInstruction: withCurrentDate(SYSTEM_PROMPT),
-        temperature: 0.3,
-        responseMimeType: "application/json",
-        responseJsonSchema: GEMINI_AGENT_RESPONSE_JSON_SCHEMA,
-        thinkingConfig: GEMINI_THINKING_CONFIG,
-        abortSignal: signal,
+    const { response, model } = await generateWithFallback(
+      ai,
+      {
+        contents: userText,
+        config: {
+          systemInstruction: withCurrentDate(SYSTEM_PROMPT),
+          temperature: 0.3,
+          responseMimeType: "application/json",
+          responseJsonSchema: GEMINI_AGENT_RESPONSE_JSON_SCHEMA,
+          thinkingConfig: GEMINI_THINKING_CONFIG,
+        },
       },
-    });
+      { signal, log },
+    );
+    answeredBy = model;
     rawText = response.text ?? "";
     finishReason = response.candidates?.[0]?.finishReason;
     usage = response.usageMetadata;
@@ -104,8 +110,8 @@ export async function generateAgentOutput(
     if (signal?.aborted) {
       throw new AgentTurnAbortedError("Gemini request aborted");
     }
-    // Network / API failure — counts toward the breaker.
-    recordFailure("gemini");
+    // Every attempt failed. Rate limits (429) are budget, not a provider fault.
+    if (!(err instanceof GeminiUnavailableError && err.quotaOnly)) recordFailure("gemini");
     throw err;
   }
 
@@ -113,7 +119,7 @@ export async function generateAgentOutput(
     throw new AgentTurnAbortedError("Gemini request aborted after response");
   }
 
-  log.info({ finishReason, usage }, "Gemini response");
+  log.info({ model: answeredBy, finishReason, usage }, "Gemini response");
 
   if (!rawText) {
     // Empty body is a provider-side anomaly.
@@ -195,6 +201,14 @@ export async function safeGenerateAgentOutput(
       log.warn({ err }, "Gemini budget exceeded");
       return {
         reply: "I am over my daily limit. Please try again later.",
+        intent: "fallback",
+        card: null,
+      };
+    }
+    if (err instanceof GeminiUnavailableError) {
+      log.warn({ failures: err.failures }, "Gemini unavailable — telling the user");
+      return {
+        reply: "I could not reach my language model just now. Please ask again in a moment.",
         intent: "fallback",
         card: null,
       };

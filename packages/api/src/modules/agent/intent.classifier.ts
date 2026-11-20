@@ -4,6 +4,7 @@
 
 import type { IntentType } from "@voice-agent/shared-types";
 import { extractReminderDetails } from "./reminder-parser.js";
+import { extractWeatherLocation } from "./location.js";
 
 export type ClassifyResult = {
   intent: IntentType;
@@ -28,14 +29,18 @@ const KEYWORD_RULES: KeywordRule[] = [
       /\bwhat(?:'s|\s+is)\s+the\s+weather\b/i,
     ],
     extract: (text: string): Record<string, string> => {
-      const m = text.match(/\b(?:in|for|at)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s*[?.!]?/i);
-      return m?.[1] ? { location: m[1].trim() } : {};
+      const location = extractWeatherLocation(text);
+      return location ? { location } : {};
     },
   },
   {
     intent: "reminder",
+    // An explicit instruction only. The bare word "reminder" is not enough:
+    // "What does reminder do in this application?" used to create a reminder.
     patterns: [
-      /\b(remind|reminder|remember\s+to|set\s+a\s+reminder)\b/i,
+      /\bremind\s+me\b/i,
+      /\b(?:set|add|create|make|schedule|save)\s+(?:me\s+)?(?:a\s+|an\s+)?reminder\b/i,
+      /^\s*(?:please\s+)?remember\s+to\b/i,
       /\bdon'?t\s+let\s+me\s+forget\b/i,
     ],
     extract: (text: string): Record<string, string> => {
@@ -81,6 +86,8 @@ const KEYWORD_RULES: KeywordRule[] = [
       /\b(summarize|summary|summarise|tldr|tl;dr|recap)\b/i,
       /\bgive\s+me\s+the\s+(main\s+)?points\b/i,
     ],
+    extract: (text: string): Record<string, string> =>
+      CONVERSATION_SCOPE.some((p) => p.test(text)) ? { scope: "conversation" } : {},
   },
   {
     intent: "help",
@@ -90,6 +97,48 @@ const KEYWORD_RULES: KeywordRule[] = [
     ],
   },
 ];
+
+/** "Summarize everything we discussed" → summarise the session, not this utterance. */
+const CONVERSATION_SCOPE: RegExp[] = [
+  /\b(?:everything|all|what)\b[^.?!]*\b(?:we|we've|we\s+have|i|i've|i\s+have|you)\b[^.?!]*\b(?:discuss\w*|talk\w*|said|say|covered|chatted|asked|went\s+over)\b/i,
+  /\b(?:our|this|the)\s+(?:whole\s+|entire\s+)?(?:conversation|chat|discussion|session|talk)\b/i,
+  /\bso\s+far\b/i,
+];
+
+const FEATURE = String.raw`(?:reminders?|weather|translat\w*|summar\w*|recap|help)`;
+const FEATURE_NOUN = String.raw`(?:\s+(?:feature|function|tool|command|option|button|mode))?`;
+
+/**
+ * Questions ABOUT a feature ("What does reminder do in this application?",
+ * "How does the weather feature work?") must not run the feature. They go to
+ * Gemini, which answers as help/general.
+ */
+const FEATURE_QUESTION: RegExp[] = [
+  new RegExp(
+    String.raw`\bwhat\s+(?:does|do|is|are)\s+(?:the\s+|your\s+)?${FEATURE}${FEATURE_NOUN}\s+(?:do|does|for|mean)\b`,
+    "i",
+  ),
+  new RegExp(
+    String.raw`\bhow\s+(?:does|do|can|would)\s+(?:i\s+use\s+)?(?:the\s+|your\s+)?${FEATURE}${FEATURE_NOUN}\s*(?:work|works|\?|$)`,
+    "i",
+  ),
+  new RegExp(
+    String.raw`\bhow\s+(?:do|can)\s+i\s+(?:use|set\s+up)\s+(?:the\s+|a\s+)?${FEATURE}`,
+    "i",
+  ),
+  new RegExp(
+    String.raw`\b(?:explain|tell\s+me\s+about|describe)\s+(?:the\s+|your\s+)?${FEATURE}${FEATURE_NOUN}\s+(?:feature|function|tool|command|in\s+this\s+app)`,
+    "i",
+  ),
+  new RegExp(
+    String.raw`\b${FEATURE}\s+(?:feature|function|tool|command|option)s?\b[^?]*\b(?:do|work|does)\b`,
+    "i",
+  ),
+];
+
+export function isFeatureQuestion(text: string): boolean {
+  return FEATURE_QUESTION.some((p) => p.test(text));
+}
 
 const TRANSLATION_LANGUAGES: Record<string, string> = {
   swedish: "sv",
@@ -120,6 +169,8 @@ export function classifyByKeywords(text: string): ClassifyResult | null {
       slots: meaningTranslation,
     };
   }
+
+  if (isFeatureQuestion(normalised)) return null;
 
   for (const rule of KEYWORD_RULES) {
     for (const pattern of rule.patterns) {

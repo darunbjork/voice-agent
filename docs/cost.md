@@ -6,11 +6,11 @@ Local development defaults to `VOICE_MOCK=true`, which makes no provider calls a
 
 ## Providers and free tiers
 
-| Provider   | Used for                     | Model / voice                                            | Free-tier notes                                                                                                                                                    |
-| ---------- | ---------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Deepgram   | Speech-to-text, fallback TTS | `nova-2` (STT), `aura-asteria-en` (Aura TTS fallback)    | Free credit balance; an exhausted balance or rate limit returns `402` / `429`                                                                                      |
-| Gemini     | Reasoning                    | `gemini-3.1-flash-lite-preview` (`GEMINI_MODEL`)         | Free tier is rate-limited per model; Google rotates preview model ids                                                                                              |
-| ElevenLabs | Primary TTS                  | `eleven_turbo_v2_5`, voice Lily (`pFZP5JQG7iQjIQuC4Bku`) | Small monthly character quota; library voices return `402`/`404` on the free plan, so a premade voice is used. Exhausted credits come back as `401 quota_exceeded` |
+| Provider   | Used for                     | Model / voice                                                                      | Free-tier notes                                                                                                                                                    |
+| ---------- | ---------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Deepgram   | Speech-to-text, fallback TTS | `nova-3` + keyterms (STT), `aura-asteria-en` (Aura TTS fallback)                   | Free credit balance; an exhausted balance or rate limit returns `402` / `429`                                                                                      |
+| Gemini     | Reasoning                    | `gemini-3.1-flash-lite-preview` (`GEMINI_MODEL`), fallback `gemini-3.1-flash-lite` | Free tier is rate-limited per model; Google rotates preview model ids                                                                                              |
+| ElevenLabs | Primary TTS                  | `eleven_turbo_v2_5`, voice Lily (`pFZP5JQG7iQjIQuC4Bku`)                           | Small monthly character quota; library voices return `402`/`404` on the free plan, so a premade voice is used. Exhausted credits come back as `401 quota_exceeded` |
 
 Exact quotas change; check each provider's pricing page before relying on a number:
 [Deepgram](https://deepgram.com/pricing) · [Gemini](https://ai.google.dev/pricing) · [ElevenLabs](https://elevenlabs.io/pricing).

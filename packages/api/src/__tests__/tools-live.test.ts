@@ -64,11 +64,11 @@ describe("weather tool (live mode, stubbed Open-Meteo)", () => {
       slots: { location: "Berlin" },
     });
 
-    expect(r.card.location).toBe("Berlin, Germany");
-    expect(r.card.temp).toBe("22°C");
-    expect(r.card.desc).toBe("Overcast");
-    expect(r.card.humidity).toBe("61%");
-    expect(r.card.wind).toBe("14 km/h");
+    expect(r.card!.location).toBe("Berlin, Germany");
+    expect(r.card!.temp).toBe("22°C");
+    expect(r.card!.desc).toBe("Overcast");
+    expect(r.card!.humidity).toBe("61%");
+    expect(r.card!.wind).toBe("14 km/h");
     expect(r.replyHint).toContain("22°C");
     expect(r.replyHint).toContain("Berlin, Germany");
   });
@@ -95,8 +95,8 @@ describe("weather tool (live mode, stubbed Open-Meteo)", () => {
 
     const r = await weatherTool({ userText: "weather", slots: { location: "Oslo" } });
     expect(r.replyHint).toContain("could not reach the weather service");
-    expect(r.card.location).toBe("Oslo");
-    expect(r.card.desc).toContain("demo data");
+    expect(r.card!.location).toBe("Oslo");
+    expect(r.card!.desc).toContain("demo data");
     expect(r.replyHint).toContain("demo data");
   });
 
