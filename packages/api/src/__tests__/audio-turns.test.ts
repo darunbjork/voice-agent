@@ -127,7 +127,11 @@ describe("audio WebSocket turns always end in a reply or a visible error", () =>
       ask(ws, "an animation video?");
     }, 700);
 
-    expect(seen).toEqual(["Can I build", "Can I build an animation video?"]);
+    // The fragment may be cancelled before or after it reached the agent.
+    expect(seen.at(-1)).toBe("Can I build an animation video?");
+    expect(seen.every((t) => t === "Can I build" || t === "Can I build an animation video?")).toBe(
+      true,
+    );
     expect(replies(msgs)).toEqual(["answer to: Can I build an animation video?"]);
     expect(errors(msgs)).toEqual([]);
   });
@@ -145,6 +149,26 @@ describe("audio WebSocket turns always end in a reply or a visible error", () =>
     }, 600);
 
     expect(replies(msgs)).toEqual(["answer to: Which language is more into tech?"]);
+  });
+
+  it.each([
+    ["Can I build", "an animation video?"],
+    ["Which language is more", "into tech?"],
+    ["What kind of app would attract", "users, developers,"],
+  ])("live split %s / %s → one merged reply", async (first, second) => {
+    handleUtteranceMock.mockImplementation(
+      async (input: { text: string; signal?: AbortSignal }) => {
+        await sleep(150);
+        if (input.signal?.aborted) throw new Error("aborted");
+        return reply(input.text);
+      },
+    );
+    const msgs = await session(async (ws) => {
+      ask(ws, first);
+      await sleep(40);
+      ask(ws, second);
+    }, 600);
+    expect(replies(msgs)).toEqual([`${first} ${second}`]);
   });
 
   it("three fragments become one turn", async () => {

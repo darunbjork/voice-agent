@@ -9,7 +9,10 @@ export type TranslationLanguage = { name: string; code: string };
 
 export type TranslateRequest = {
   original?: string;
+  /** Target language. */
   language?: TranslationLanguage;
+  /** Source language, only when the user said it ("from English"). */
+  source?: TranslationLanguage;
 };
 
 /** Lowercase language name → ISO 639-1 code. */
@@ -83,7 +86,8 @@ export function resolveLanguage(raw: string): TranslationLanguage | null {
 }
 
 /** Words that stand in for a phrase but are not one ("translate this"). */
-const PLACEHOLDER = /^(?:this|that|it|something|anything|a\s+(?:word|phrase|sentence))$/i;
+const PLACEHOLDER =
+  /^(?:this|that|it|something|anything|please|a\s+(?:word|phrase|sentence)|for\s+me|me)$/i;
 
 const LEAD_IN =
   /^(?:(?:okay|ok|so|hey|please|can\s+you|could\s+you|would\s+you|i\s+want\s+you\s+to)[,.!]?\s+)*(?:(?:translation|translate)[:.,!]?\s*)?/i;
@@ -113,6 +117,22 @@ const rx = (source: string): RegExp => new RegExp(source, "i");
  * Phrase-and-language patterns, most specific first. Each yields
  * [phrase, language] (or [language, phrase] when `swap`).
  */
+/**
+ * Speech recognition adds punctuation mid-sentence ("What does, lunch mean in
+ * Danish?"). Commas, semicolons and colons become spaces; quotes are kept.
+ */
+export function normaliseTranscript(text: string): string {
+  return text
+    .replace(/[,;:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** "translate X from A to B" / "X from A to B" → phrase, source, target. */
+const FROM_TO = rx(
+  String.raw`^(?:.*?\btranslate\s+)?(.+?)\s+from\s+${LANG}\s+(?:to|into)\s+${LANG}${END}`,
+);
+
 const FULL_PATTERNS: Array<{ re: RegExp; swap?: boolean; guard?: (phrase: string) => boolean }> = [
   // translate X to / into / in Y
   { re: rx(String.raw`\btranslate\s+(.+?)\s+(?:to|into|in)\s+${LANG}${END}`) },
@@ -162,8 +182,16 @@ const FULL_PATTERNS: Array<{ re: RegExp; swap?: boolean; guard?: (phrase: string
  * Either may be missing; callers must ask rather than guess.
  */
 export function parseTranslateRequest(text: string): TranslateRequest {
-  const input = text.trim();
+  const input = normaliseTranscript(text);
   if (!input) return {};
+
+  const fromTo = input.match(FROM_TO);
+  if (fromTo?.[1] && fromTo[2] && fromTo[3]) {
+    const original = cleanPhrase(fromTo[1]);
+    const source = resolveLanguage(fromTo[2]);
+    const language = resolveLanguage(fromTo[3]);
+    if (original && source && language) return { original, language, source };
+  }
 
   for (const { re, swap, guard } of FULL_PATTERNS) {
     const m = input.match(re);
@@ -216,4 +244,32 @@ function damerauLevenshtein(left: string, right: string): number {
     }
   }
   return d[left.length]![right.length]!;
+}
+
+/**
+ * A reply that is just a language ("French", "In French, please", "into
+ * danish.") → that language; anything else → null.
+ */
+export function parseLanguageAnswer(text: string): TranslationLanguage | null {
+  const words = normaliseTranscript(text)
+    .replace(/[?.!]+/g, " ")
+    .replace(/\b(?:in|into|to|please|thanks|thank\s+you|okay|ok|um|uh|so|the|language)\b/gi, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return words.length === 1 ? resolveLanguage(words[0]!) : null;
+}
+
+/**
+ * "What does good night mean?" with no language → "good night". Acronyms and
+ * codes (RAG, MCP, n8n, GPT-4) are definition questions, not translations.
+ */
+export function parseMeaningWithoutLanguage(text: string): string | null {
+  const m = normaliseTranscript(text).match(
+    /^(?:what\s+(?:does|do|dose)|what's)\s+(.+?)\s+means?\s*[?.!]*$/i,
+  );
+  if (!m?.[1]) return null;
+  const phrase = cleanPhrase(m[1]);
+  if (!phrase || /\d/.test(phrase) || /\b[A-Z]{2,}\b/.test(phrase)) return null;
+  return phrase;
 }

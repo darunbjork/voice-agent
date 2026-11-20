@@ -107,21 +107,21 @@ describe("the live bug: Translate good morning to Swedish", () => {
 
 describe("never a default phrase or language — ask instead", () => {
   it.each([
-    "Translate",
-    "Translate please",
-    "Translate this",
-    "Translate to Swedish",
-    "Can you translate into French?",
-    "Translate good morning",
-    "Translate good morning to Klingon",
-    "I need a translation",
-  ])("%s → asks what and into which language", async (utterance) => {
+    ["Translate", TRANSLATE_CLARIFY_REPLY],
+    ["Translate please", TRANSLATE_CLARIFY_REPLY],
+    ["Translate this", TRANSLATE_CLARIFY_REPLY],
+    ["I need a translation", TRANSLATE_CLARIFY_REPLY],
+    ["Translate to Swedish", "What would you like me to translate into Swedish?"],
+    ["Can you translate into French?", "What would you like me to translate into French?"],
+    ["Translate good morning", 'Which language should I translate "good morning" into?'],
+    ["Translate good morning to Klingon", 'Which language should I translate "good morning" into?'],
+  ])("%s → asks only for what is missing", async (utterance, question) => {
     const r = await translateTool({
       userText: utterance,
       slots: classifyByKeywords(utterance)?.slots ?? {},
     });
     expect(r.card).toBeNull();
-    expect(r.replyHint).toBe(TRANSLATE_CLARIFY_REPLY);
+    expect(r.replyHint).toBe(question);
     expect(r.replyHint).not.toMatch(/hello|hej/i);
   });
 

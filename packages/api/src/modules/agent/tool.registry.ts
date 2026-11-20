@@ -13,6 +13,8 @@ export type ToolInput = {
 export type ToolResult = {
   card: ResponseCard | null;
   replyHint: string | null;
+  /** Translate only: what is known so far when the tool had to ask. */
+  pending?: Record<string, string>;
 };
 
 export type ToolHandler = (input: ToolInput) => Promise<ToolResult>;

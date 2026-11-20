@@ -5,7 +5,18 @@ import type {
   IntentType,
   LatencyBreakdown,
 } from "@voice-agent/shared-types";
-import { classifyByKeywords } from "./intent.classifier.js";
+import { classifyByKeywords, type ClassifyResult } from "./intent.classifier.js";
+import {
+  cleanPhrase,
+  normaliseTranscript,
+  parseLanguageAnswer,
+  parseMeaningWithoutLanguage,
+} from "./translate-request.js";
+import {
+  setPendingTranslation,
+  takePendingTranslation,
+  type PendingTranslation,
+} from "./pending-requests.js";
 import { safeGenerateAgentOutput } from "./gemini.service.js";
 import { runTool } from "./tool.registry.js";
 import { incrementUsage } from "../../utils/usage-tracker.js";
@@ -80,6 +91,52 @@ async function loadConversation(
   return formatConversation(turns);
 }
 
+const translateTurn = (slots: Record<string, string>): ClassifyResult => ({
+  intent: "translate",
+  viaFastPath: true,
+  confidence: 1,
+  slots,
+});
+
+const WANTS_MEANING =
+  /^(?:the\s+)?(?:meaning|definition)\b|\bdefine\b|\bwhat\s+it\s+means\b|^explain\b/i;
+
+/**
+ * The previous turn asked for a missing piece of a translation. Returns the
+ * completed translation, a rewritten "what does X mean?" if the user wanted
+ * the meaning instead, or null when the new utterance is something else.
+ */
+export function completePendingTranslation(
+  pending: PendingTranslation,
+  text: string,
+  fast: ClassifyResult | null,
+): { kind: "translate"; slots: Record<string, string> } | { kind: "meaning"; text: string } | null {
+  if (pending.original && !pending.toLang) {
+    if (WANTS_MEANING.test(text.trim())) {
+      return { kind: "meaning", text: `What does "${pending.original}" mean?` };
+    }
+    const language = parseLanguageAnswer(text);
+    return language ? { kind: "translate", slots: { ...pending, toLang: language.name } } : null;
+  }
+  if (!pending.original && pending.toLang) {
+    if (fast && fast.intent !== "translate") return null;
+    const original = cleanPhrase(normaliseTranscript(text));
+    return original ? { kind: "translate", slots: { ...pending, original } } : null;
+  }
+  return null;
+}
+
+/**
+ * "What does good night mean?" (no language) is treated as a translation
+ * request — the tool then asks which language — when the phrase has several
+ * words or the conversation was just about translations. A single word
+ * ("What does endemic mean?") stays a definition question.
+ */
+function meaningLooksLikeTranslation(phrase: string, context: SessionContextTurn[]): boolean {
+  if (phrase.trim().split(/\s+/).length >= 2) return true;
+  return context.slice(-4).some((t) => t.role === "agent" && t.intent === "translate");
+}
+
 export async function handleUtterance(
   input: HandleUtteranceInput,
   log: FastifyBaseLogger,
@@ -95,7 +152,30 @@ export async function handleUtterance(
     return buildEmptyReply(input, pipelineStart);
   }
 
-  const fast = classifyByKeywords(trimmed);
+  let text = trimmed;
+  let fast = classifyByKeywords(text);
+  let rewritten = false;
+
+  // A translation we asked a question about last turn ("Which language?").
+  const pending = takePendingTranslation(input.sessionId);
+  const fullTranslate = fast?.intent === "translate" && fast.slots.original && fast.slots.toLang;
+  if (pending && !fullTranslate) {
+    const completed = completePendingTranslation(pending, text, fast);
+    if (completed?.kind === "translate") {
+      fast = translateTurn(completed.slots);
+    } else if (completed?.kind === "meaning") {
+      text = completed.text;
+      fast = null;
+      rewritten = true;
+    }
+  }
+
+  if (!fast && !rewritten) {
+    const phrase = parseMeaningWithoutLanguage(text);
+    if (phrase && meaningLooksLikeTranslation(phrase, input.context ?? [])) {
+      fast = translateTurn({ original: phrase, mode: "meaning-or-translate" });
+    }
+  }
 
   let output: GeminiAgentOutput;
   let intent: IntentType;
@@ -122,9 +202,13 @@ export async function handleUtterance(
     const toolResult = await runTool(fast.intent, {
       // A conversation summary works on the session transcript, not on the
       // request itself ("summarize everything we discussed").
-      userText: conversationSummary ? conversation : trimmed,
+      userText: conversationSummary ? conversation : text,
       slots: fast.slots,
     });
+
+    if (toolResult.pending && Object.keys(toolResult.pending).length > 0) {
+      setPendingTranslation(input.sessionId, toolResult.pending);
+    }
 
     output = {
       reply: toolResult.replyHint ?? "I handled that request.",
@@ -139,7 +223,7 @@ export async function handleUtterance(
   } else {
     viaFastPath = false;
 
-    const promptText = buildPromptWithContext(trimmed, input.context ?? []);
+    const promptText = buildPromptWithContext(text, input.context ?? []);
 
     const generated = await safeGenerateAgentOutput(promptText, log, undefined, input.signal);
     source = generated.source ?? "none";

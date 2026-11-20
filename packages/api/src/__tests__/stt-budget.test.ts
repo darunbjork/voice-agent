@@ -378,10 +378,10 @@ describe("utterance assembly", () => {
   const interims = (msgs: ServerAudioMessage[]): string[] =>
     msgs.flatMap((m) => (m.type === "transcript_interim" ? [m.text] : []));
 
-  it("asks Deepgram for UtteranceEnd after 1.5 s (utterance_end_ms=1500, vad_events) and keeps endpointing", async () => {
+  it("asks Deepgram for UtteranceEnd after 2 s (utterance_end_ms=2000, vad_events) and keeps endpointing", async () => {
     const { fake } = await connected();
     const q = new URL(fake.lastPath(), "ws://x").searchParams;
-    expect(q.get("utterance_end_ms")).toBe("1500");
+    expect(q.get("utterance_end_ms")).toBe("2000");
     expect(q.get("vad_events")).toBe("true");
     expect(q.get("interim_results")).toBe("true");
     expect(q.get("endpointing")).toBe("500");
@@ -417,6 +417,24 @@ describe("utterance assembly", () => {
     expect(finals(msgs)).toEqual(["Hello", "How are you?"]);
   });
 
+  // Split examples from live rounds 3–4. Each pause is just under the 2 s
+  // merge window; one transcript_final must come out.
+  it.each([
+    [["Can I build", "an animation video?"], 1900],
+    [["Which language is more", "into tech?"], 1500],
+    [["What kind of app would attract", "users, developers,"], 1200],
+  ])("pauses below 2 s keep %j as one utterance", async (pieces, pauseMs) => {
+    const { fake, msgs } = await connected();
+    const dg = fake.last()!;
+    dg.send(results(pieces[0]!, true, true));
+    await sleep(pauseMs);
+    expect(finals(msgs)).toEqual([]);
+    dg.send(results(pieces[1]!, true, true));
+    dg.send(JSON.stringify({ type: "UtteranceEnd" }));
+    await waitUntil(() => finals(msgs).length === 1);
+    expect(finals(msgs)).toEqual([pieces.join(" ")]);
+  });
+
   it("ignores UtteranceEnd with nothing finalised", async () => {
     const { fake, msgs } = await connected();
     fake.last()!.send(JSON.stringify({ type: "UtteranceEnd" }));
@@ -427,7 +445,7 @@ describe("utterance assembly", () => {
   it("emits pending segments if UtteranceEnd never arrives", async () => {
     const { fake, msgs } = await connected();
     fake.last()!.send(results("What time is it", true, true));
-    await sleep(2000);
+    await sleep(2500);
     expect(finals(msgs)).toEqual([]);
     await waitUntil(() => finals(msgs).length === 1, 2000);
     expect(finals(msgs)).toEqual(["What time is it"]);
@@ -447,7 +465,7 @@ describe("utterance assembly", () => {
     fake.last()!.send(results("half a sentence", true));
     await sleep(30);
     proxy!.close();
-    await sleep(2700);
+    await sleep(3200);
     expect(finals(msgs)).toEqual([]);
   });
 });

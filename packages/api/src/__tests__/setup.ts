@@ -20,7 +20,21 @@ function geocodeResponse(url: string): Response {
   });
 }
 
-function forecastResponse(): Response {
+function forecastResponse(url: string): Response {
+  if (url.includes("daily=")) {
+    // 7-day daily forecast: day i has max 10+i °C, min 2+i °C.
+    const days = Array.from({ length: 7 }, (_, i) => i);
+    return jsonResponse({
+      daily: {
+        weather_code: days.map(() => 61),
+        temperature_2m_max: days.map((i) => 10 + i),
+        temperature_2m_min: days.map((i) => 2 + i),
+        precipitation_probability_max: days.map((i) => 40 + i),
+        wind_speed_10m_max: days.map(() => 20),
+        relative_humidity_2m_mean: days.map(() => 80),
+      },
+    });
+  }
   return jsonResponse({
     current: {
       temperature_2m: 21.6,
@@ -34,6 +48,6 @@ function forecastResponse(): Response {
 globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const url = String(input);
   if (url.includes("geocoding-api.open-meteo.com")) return geocodeResponse(url);
-  if (url.includes("api.open-meteo.com")) return forecastResponse();
+  if (url.includes("api.open-meteo.com")) return forecastResponse(url);
   return realFetch(input, init);
 };

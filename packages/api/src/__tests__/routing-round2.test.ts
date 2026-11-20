@@ -312,7 +312,7 @@ describe("F. Deepgram model and tech vocabulary", () => {
     expect(p.get("model")).toBe("nova-3");
     expect(p.getAll("keyterm")).toEqual(["RAG", "MCP", "agentic"]);
     expect(p.getAll("keywords")).toEqual([]);
-    expect(p.get("utterance_end_ms")).toBe("1500");
+    expect(p.get("utterance_end_ms")).toBe("2000");
   });
 
   it("the default tech keyterms all reach the nova-3 listen URL", () => {
