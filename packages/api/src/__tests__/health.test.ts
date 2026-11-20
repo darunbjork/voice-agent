@@ -30,7 +30,12 @@ describe("GET /health", () => {
     expect(typeof body.dailyTokens).toBe("number");
     expect(typeof body.correlationId).toBe("string");
     expect(body.correlationId.length).toBeGreaterThan(0);
-    expect(body.circuits).toHaveLength(3);
+    expect(body.circuits.map((c: { provider: string }) => c.provider)).toEqual([
+      "gemini",
+      "groq",
+      "deepgram",
+      "elevenlabs",
+    ]);
     expect(body.circuits[0]).toEqual({
       provider: "gemini",
       state: "closed",

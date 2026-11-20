@@ -127,7 +127,8 @@ describe("Gemini request configuration", () => {
     );
     const { log, calls } = recordingLogger();
     await generateAgentOutput("How many states does the USA have?", log);
-    expect(calls.info.find(([, m]) => m === "Gemini response")?.[0]).toMatchObject({
+    expect(calls.info.find(([, m]) => m === "LLM response")?.[0]).toMatchObject({
+      provider: "gemini",
       finishReason: "STOP",
       usage: { promptTokenCount: 300 },
     });

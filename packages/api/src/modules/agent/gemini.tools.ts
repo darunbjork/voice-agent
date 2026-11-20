@@ -1,8 +1,7 @@
-import { GoogleGenAI, ThinkingLevel } from "@google/genai";
-import { GeminiUnavailableError, generateWithFallback } from "./gemini.call.js";
+import { generateLlm, llmChain, type LlmResult } from "./llm.call.js";
 import { env } from "../../env.js";
 import { assertWithinBudget, estimateTokens } from "../../utils/token-budget.js";
-import { assertCircuitClosed, recordSuccess, recordFailure } from "../../utils/circuit-breaker.js";
+import { recordFailure } from "../../utils/circuit-breaker.js";
 
 /**
  * Pinned to flash-lite-preview: `gemini-flash-latest` timed out at 45s on the
@@ -10,12 +9,8 @@ import { assertCircuitClosed, recordSuccess, recordFailure } from "../../utils/c
  */
 export const GEMINI_MODEL_ID = env.GEMINI_MODEL;
 
-/**
- * Lowest thinking level. Replies here are one to three spoken sentences; on
- * flash-lite-preview LOW spent ~120 thought tokens on "how many states does
- * the USA have", MINIMAL spends none.
- */
-export const GEMINI_THINKING_CONFIG = { thinkingLevel: ThinkingLevel.MINIMAL };
+/** Lowest thinking level (MINIMAL); lives with the provider chain. */
+export { GEMINI_THINKING_CONFIG } from "./llm.call.js";
 
 export const ASSISTANT_TIME_ZONE = "Europe/Stockholm";
 
@@ -66,42 +61,27 @@ export class ToolTextError extends Error {
  * those propagate as-is for callers that care.
  */
 export async function generateToolText(system: string, prompt: string): Promise<string> {
-  if (!env.GEMINI_API_KEY) {
-    throw new ToolTextError("GEMINI_API_KEY is not configured");
+  if (llmChain().length === 0) {
+    throw new ToolTextError("No LLM configured (GEMINI_API_KEY / GROQ_API_KEY)");
   }
-
-  assertCircuitClosed("gemini");
 
   const estimated = estimateTokens(prompt) + estimateTokens(system) + 200;
   assertWithinBudget("agent_response", estimated);
 
-  const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
-
-  let rawText: string;
+  let result: LlmResult;
   try {
-    const { response } = await generateWithFallback(
-      ai,
-      {
-        contents: prompt,
-        config: {
-          systemInstruction: withCurrentDate(system),
-          temperature: 0.2,
-          thinkingConfig: GEMINI_THINKING_CONFIG,
-        },
-      },
+    result = await generateLlm(
+      { system: withCurrentDate(system), user: prompt, temperature: 0.2 },
       { attemptTimeoutMs: TOOL_ATTEMPT_TIMEOUT_MS, hedgeAfterMs: TOOL_HEDGE_AFTER_MS },
     );
-    rawText = (response.text ?? "").trim();
   } catch (err) {
-    if (!(err instanceof GeminiUnavailableError && err.quotaOnly)) recordFailure("gemini");
-    throw err instanceof Error ? err : new ToolTextError("Gemini request failed");
+    throw err instanceof Error ? err : new ToolTextError("LLM request failed");
   }
 
+  const rawText = result.text.trim();
   if (!rawText) {
-    recordFailure("gemini");
-    throw new ToolTextError("Gemini returned an empty response");
+    recordFailure(result.provider);
+    throw new ToolTextError(`${result.provider} returned an empty response`);
   }
-
-  recordSuccess("gemini");
   return rawText;
 }
