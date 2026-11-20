@@ -278,10 +278,17 @@ describe("F. Deepgram model and tech vocabulary", () => {
     const parsed = envSchema.parse({ DATABASE_URL: "postgresql://x", JWT_SECRET: "x".repeat(32) });
     expect(parsed.DEEPGRAM_MODEL).toBe("nova-3");
     expect(parsed.DEEPGRAM_KEYTERMS).toEqual([
+      "ChatGPT",
+      "OpenAI",
+      "n8n",
       "RAG",
       "MCP",
-      "agentic",
+      "Art25",
       "LLM",
+      "TypeScript",
+      "React",
+      "Node.js",
+      "agentic",
       "API",
       "Gemini",
       "Deepgram",
@@ -305,7 +312,30 @@ describe("F. Deepgram model and tech vocabulary", () => {
     expect(p.get("model")).toBe("nova-3");
     expect(p.getAll("keyterm")).toEqual(["RAG", "MCP", "agentic"]);
     expect(p.getAll("keywords")).toEqual([]);
-    expect(p.get("utterance_end_ms")).toBe("1000");
+    expect(p.get("utterance_end_ms")).toBe("1500");
+  });
+
+  it("the default tech keyterms all reach the nova-3 listen URL", () => {
+    env.DEEPGRAM_MODEL = "nova-3";
+    env.DEEPGRAM_KEYTERMS = envSchema.parse({
+      DATABASE_URL: "postgresql://x",
+      JWT_SECRET: "x".repeat(32),
+    }).DEEPGRAM_KEYTERMS;
+    const query = deepgramListenParams().toString();
+    for (const term of [
+      "ChatGPT",
+      "OpenAI",
+      "n8n",
+      "RAG",
+      "MCP",
+      "Art25",
+      "LLM",
+      "TypeScript",
+      "React",
+      "Node.js",
+    ]) {
+      expect(query).toContain(`keyterm=${encodeURIComponent(term)}`);
+    }
   });
 
   it("nova-2 (no keyterm support) gets boosted keywords instead", () => {

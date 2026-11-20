@@ -18,17 +18,27 @@ import { withCurrentDate } from "./gemini.tools.js";
 import { LlmUnavailableError, generateLlm, llmChain, type LlmResult } from "./llm.call.js";
 import { AgentTurnAbortedError, isTurnAborted } from "../../utils/turn-abort.js";
 
+export const AGENT_TEMPERATURE = 0.1;
+
 export const SYSTEM_PROMPT = `You are a voice assistant. Your reply is spoken aloud: plain text, no markdown, at most 3 sentences.
 Return JSON with "reply", "intent" and "card".
 
 Pick exactly one intent:
-- "general": factual or everyday questions (facts, numbers, definitions, people, places, dates, "what day is it"). Answer directly and correctly in 1-2 short sentences. card: null.
+- "general": factual or everyday questions (facts, numbers, definitions, people, places, dates, "what day is it"). Answer in 1-2 short sentences. card: null.
 - "weather", "reminder", "translate", "summarize": the user asks for that task. Include the matching card only if you can fill every field, otherwise card: null.
 - "help": only when the user asks what you can do.
 - "fallback": only when the request is unintelligible. Never use it for a question you can answer.
 
 This app's features: weather (current weather for a city), reminders (saved only when the user says "remind me to ..."), translation of short phrases, and summaries (of what the user says or of this conversation).
 A question ABOUT a feature ("what does reminder do?", "how does translation work?") is "help": explain the feature, do not perform it, card: null.
+
+Rules for every answer, especially "general":
+- Only state facts you are confident are true. If you are not sure, say "I'm not sure" (and, if useful, what you do know). A short honest answer beats a confident wrong one.
+- Never invent products, models, companies, acronym expansions, laws, regulations, places, people, events or numbers.
+- Resolve acronyms and short names from the conversation so far first: if the user or you already said what MCP means, keep that meaning.
+- The user's words come from speech recognition and can be misheard. If a word looks like a transcription error or a name you do not recognise (for example "ChargeGBT"), do not guess what it is: ask "Did you mean …?" with the most likely intended word.
+- You can only talk and use the features listed above. You cannot control the microphone, the speaker, other apps, websites, files or device settings, and you cannot send messages or make purchases. Never claim you did any of these; say you cannot.
+- A fragment that is clearly an unfinished sentence should get a short request to finish the thought, not a guessed answer.
 
 Use the current date and time above for anything relative to now (today, tomorrow, this year).
 card is null or exactly one of these shapes:
@@ -37,6 +47,9 @@ card is null or exactly one of these shapes:
 {"type":"translate","original","translated","fromLang","toLang"}
 {"type":"summary","points":[string],"source"}
 {"type":"help","commands":[{"name","description"}]}`;
+
+/** Agent output plus which provider/model produced it (for per-reply logging). */
+export type AgentOutput = GeminiAgentOutput & { source?: string };
 
 export class GeminiParseError extends Error {
   constructor(
@@ -54,14 +67,14 @@ export async function generateAgentOutput(
   log: FastifyBaseLogger,
   preferredIntent?: IntentType,
   signal?: AbortSignal,
-): Promise<GeminiAgentOutput> {
+): Promise<AgentOutput> {
   const estimated = estimateTokens(userText) + estimateTokens(SYSTEM_PROMPT) + 120;
   assertWithinBudget("agent_response", estimated);
 
   if (env.VOICE_MOCK) {
     const intent: IntentType = preferredIntent ?? "fallback";
     log.debug({ intent }, "Gemini service mock path");
-    return mockGeminiOutput(intent);
+    return { ...mockGeminiOutput(intent), source: "mock" };
   }
 
   if (llmChain().length === 0) {
@@ -85,7 +98,8 @@ export async function generateAgentOutput(
       {
         system: withCurrentDate(SYSTEM_PROMPT),
         user: userText,
-        temperature: 0.3,
+        // Low: factual answers, not creative ones (fewer invented details).
+        temperature: AGENT_TEMPERATURE,
         json: {
           name: "agent_reply",
           schema: GEMINI_AGENT_RESPONSE_JSON_SCHEMA,
@@ -118,7 +132,7 @@ export async function generateAgentOutput(
 
   // Parse errors below do NOT trip the breaker — they indicate a prompt /
   // schema problem, not provider unavailability.
-  return parseAndValidate(rawText, log, finishReason);
+  return { ...parseAndValidate(rawText, log, finishReason), source: `${provider}/${result.model}` };
 }
 
 export function parseAndValidate(
@@ -170,7 +184,7 @@ export async function safeGenerateAgentOutput(
   log: FastifyBaseLogger,
   preferredIntent?: IntentType,
   signal?: AbortSignal,
-): Promise<GeminiAgentOutput> {
+): Promise<AgentOutput> {
   try {
     return await generateAgentOutput(userText, log, preferredIntent, signal);
   } catch (err) {

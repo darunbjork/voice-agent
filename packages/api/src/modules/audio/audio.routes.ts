@@ -19,11 +19,23 @@ import { getDailyUsage } from "../../utils/usage-tracker.js";
 
 const MAX_PCM_CHUNK_BYTES = 4096;
 export const turnLimits = {
-  /** Hard ceiling for one turn; the Gemini call itself gives up well before this. */
+  /** Hard ceiling for one turn; the LLM call itself gives up well before this. */
   timeoutMs: 25_000,
-  /** Turns waiting behind the active one; beyond this new ones are refused visibly. */
-  maxQueued: 3,
 };
+
+/** Abort reason for a turn whose text was merged into the next utterance. */
+const MERGED = "merged_with_next_utterance";
+
+type FinalTranscript = Extract<ServerAudioMessage, { type: "transcript_final" }>;
+
+/** "Can I build" + "an animation video?" → "Can I build an animation video?" */
+export function mergeTranscripts(first: FinalTranscript, next: FinalTranscript): FinalTranscript {
+  return {
+    type: "transcript_final",
+    text: `${first.text} ${next.text}`.replace(/\s+/g, " ").trim(),
+    latencyMs: next.latencyMs,
+  };
+}
 /** History used for "summarize everything we discussed". */
 const SUMMARY_HISTORY_TURNS = 50;
 
@@ -44,6 +56,11 @@ export async function audioRoutes(
     let proxy: DeepgramProxy | null = null;
     let currentTts: TtsStream | null = null;
     let turnAbort: AbortController | null = null;
+    let activeTurn: {
+      msg: FinalTranscript;
+      controller: AbortController;
+      answered: boolean;
+    } | null = null;
     const sessionAbort = new AbortController();
 
     let audioFramesIn = 0;
@@ -156,10 +173,11 @@ export async function audioRoutes(
     ): Promise<void> => {
       const controller = new AbortController();
       turnAbort = controller;
+      const turn = { msg, controller, answered: false };
+      activeTurn = turn;
       const timer = setTimeout(() => controller.abort("turn_timeout"), turnLimits.timeoutMs);
-      let answered = false;
       const sendTurn = (m: ServerAudioMessage): void => {
-        if (m.type === "agent_response" || m.type === "error") answered = true;
+        if (m.type === "agent_response" || m.type === "error") turn.answered = true;
         sendSafe(m);
       };
       try {
@@ -171,9 +189,12 @@ export async function audioRoutes(
       } finally {
         clearTimeout(timer);
         if (turnAbort === controller) turnAbort = null;
+        if (activeTurn === turn) activeTurn = null;
         const reason = controller.signal.aborted ? String(controller.signal.reason) : null;
-        const sessionGone = reason === "socket_closed" || reason === "socket_error";
-        if (!answered && !sessionGone) {
+        // Merged: the merged turn that follows answers for this one.
+        const handedOver =
+          reason === "socket_closed" || reason === "socket_error" || reason === MERGED;
+        if (!turn.answered && !handedOver) {
           log.warn(
             { reason, textPreview: msg.text.slice(0, 80) },
             "Turn ended without a reply — sending a visible error",
@@ -195,29 +216,48 @@ export async function audioRoutes(
       }
     };
 
-    // Turns run one at a time, in order. A new utterance no longer aborts the
-    // one being answered, so every question gets its own reply.
-    let turnChain: Promise<void> = Promise.resolve();
-    let queuedTurns = 0;
+    // One turn at a time. Speech-to-text can finalise one sentence in two
+    // pieces ("Can I build" … "an animation video?"); live, each piece got its
+    // own reply and the first was wrong. If the next piece arrives before the
+    // previous reply was delivered, that reply is cancelled and the merged
+    // text is answered once. After a reply was delivered, a new utterance is
+    // a new question.
+    let pending: FinalTranscript | null = null;
+    let pumping = false;
+
+    const pump = async (): Promise<void> => {
+      if (pumping) return;
+      pumping = true;
+      try {
+        while (pending && !sessionAbort.signal.aborted) {
+          const next = pending;
+          pending = null;
+          await runAgentTurn(next);
+        }
+      } finally {
+        pumping = false;
+      }
+    };
 
     const onFinalTranscript = (msg: ServerAudioMessage): void => {
       if (msg.type !== "transcript_final") return;
-      if (queuedTurns > turnLimits.maxQueued) {
-        log.warn({ queuedTurns }, "Turn queue full — refusing utterance");
-        sendSafe({
-          type: "error",
-          code: "turn_queue_full",
-          message: "I am still answering your earlier questions. Please wait a moment.",
-        });
-        return;
+      let next: FinalTranscript = msg;
+      if (pending) {
+        next = mergeTranscripts(pending, msg);
+        log.info(
+          { textPreview: next.text.slice(0, 120) },
+          "Utterance merged into the waiting turn",
+        );
+      } else if (activeTurn && !activeTurn.answered && !activeTurn.controller.signal.aborted) {
+        next = mergeTranscripts(activeTurn.msg, msg);
+        activeTurn.controller.abort(MERGED);
+        log.info(
+          { textPreview: next.text.slice(0, 120) },
+          "Utterance continued before the reply — cancelled it, answering the merged text",
+        );
       }
-      queuedTurns += 1;
-      if (queuedTurns > 1) log.info({ waiting: queuedTurns - 1 }, "Turn queued");
-      turnChain = turnChain
-        .then(() => (sessionAbort.signal.aborted ? undefined : runAgentTurn(msg)))
-        .finally(() => {
-          queuedTurns -= 1;
-        });
+      pending = next;
+      void pump();
     };
 
     const setupDone = (async (): Promise<void> => {
