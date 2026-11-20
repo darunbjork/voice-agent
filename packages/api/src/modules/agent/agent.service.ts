@@ -18,6 +18,8 @@ export type HandleUtteranceInput = {
   turnIndex: number;
   sttLatencyMs: number;
   context?: SessionContextTurn[];
+  /** Full session history, loaded only when needed ("summarize everything we discussed"). */
+  loadHistory?: () => Promise<SessionContextTurn[]>;
   signal?: AbortSignal;
 };
 
@@ -28,6 +30,39 @@ export type HandleUtteranceResult = {
 };
 
 const MAX_INPUT_CHARS = 500;
+/** Most recent part of the conversation that is sent for a summary (~1k tokens). */
+export const MAX_CONVERSATION_SUMMARY_CHARS = 4000;
+
+/**
+ * "User: …\nAgent: …" transcript of the session, newest kept when it is too
+ * long. Returns "" when nothing has been discussed yet.
+ */
+export function formatConversation(turns: SessionContextTurn[]): string {
+  const lines = turns
+    .filter((t) => t.text.trim().length > 0)
+    .map((t) => `${t.role === "user" ? "User" : "Agent"}: ${t.text.trim()}`);
+  let text = lines.join("\n");
+  while (text.length > MAX_CONVERSATION_SUMMARY_CHARS && lines.length > 1) {
+    lines.shift();
+    text = lines.join("\n");
+  }
+  return text.slice(-MAX_CONVERSATION_SUMMARY_CHARS);
+}
+
+async function loadConversation(
+  input: HandleUtteranceInput,
+  log: FastifyBaseLogger,
+): Promise<string> {
+  let turns = input.context ?? [];
+  if (input.loadHistory) {
+    try {
+      turns = await input.loadHistory();
+    } catch (err) {
+      log.warn({ err }, "Could not load session history — using recent context");
+    }
+  }
+  return formatConversation(turns);
+}
 
 export async function handleUtterance(
   input: HandleUtteranceInput,
@@ -50,12 +85,26 @@ export async function handleUtterance(
   let intent: IntentType;
   let viaFastPath: boolean;
 
-  if (fast) {
+  const conversationSummary = fast?.intent === "summarize" && fast.slots.scope === "conversation";
+  const conversation = conversationSummary ? await loadConversation(input, log) : "";
+
+  if (fast && conversationSummary && !conversation) {
+    viaFastPath = true;
+    intent = "summarize";
+    output = {
+      reply:
+        "We have not discussed anything yet in this session, so there is nothing to summarize.",
+      intent,
+      card: null,
+    };
+  } else if (fast) {
     viaFastPath = true;
     intent = fast.intent;
 
     const toolResult = await runTool(fast.intent, {
-      userText: trimmed,
+      // A conversation summary works on the session transcript, not on the
+      // request itself ("summarize everything we discussed").
+      userText: conversationSummary ? conversation : trimmed,
       slots: fast.slots,
     });
 

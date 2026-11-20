@@ -25,6 +25,21 @@ export const envSchema = z.object({
   ELEVENLABS_VOICE_ID: z.string().min(1).default("pFZP5JQG7iQjIQuC4Bku"),
   GEMINI_API_KEY: z.string().optional().default(""),
   GEMINI_MODEL: z.string().min(1).default("gemini-3.1-flash-lite-preview"),
+  // Second model raced against GEMINI_MODEL when it is slow or failing (503s and
+  // >15 s hangs seen live on the preview model). Empty disables the fallback.
+  GEMINI_FALLBACK_MODEL: z.string().default("gemini-3.1-flash-lite"),
+
+  // nova-3 supports keyterm prompting; nova-2 models fall back to `keywords`.
+  DEEPGRAM_MODEL: z.string().min(1).default("nova-3"),
+  DEEPGRAM_KEYTERMS: z
+    .string()
+    .default("RAG,MCP,agentic,LLM,API,Gemini,Deepgram,ElevenLabs")
+    .transform((v) =>
+      v
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean),
+    ),
 
   // Daily spend caps (UTC day). 0 disables that provider for the day.
   DAILY_MAX_TOKENS: z.coerce.number().int().positive().default(50_000),
