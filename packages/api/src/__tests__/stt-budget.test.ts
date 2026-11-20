@@ -1,12 +1,12 @@
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type WebSocket as ServerSocket } from "ws";
 import type { FastifyBaseLogger } from "fastify";
 import type { ServerAudioMessage } from "@voice-agent/shared-types";
 import { env } from "../env.js";
 import { createDeepgramProxy, type DeepgramProxy } from "../modules/audio/deepgram.proxy.js";
-import { getCircuitSnapshot, resetAllCircuits } from "../utils/circuit-breaker.js";
+import { getCircuitSnapshot, recordFailure, resetAllCircuits } from "../utils/circuit-breaker.js";
 import { getDailyUsage, resetUsageMemory } from "../utils/usage-tracker.js";
 
 const silentLogger = {
@@ -50,6 +50,7 @@ afterEach(async () => {
   env.DEEPGRAM_LIVE = saved.deepgramLive;
   env.DEEPGRAM_API_KEY = saved.deepgramKey;
   env.DAILY_MAX_STT_SECONDS = saved.sttCap;
+  vi.useRealTimers();
   resetAllCircuits();
   resetUsageMemory();
 });
@@ -64,12 +65,22 @@ async function rejectingServer(status: number): Promise<string> {
   return `ws://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
 
-/** Fake Deepgram that accepts the connection and counts audio bytes it receives. */
-async function acceptingServer(): Promise<{ url: string; received: () => number }> {
+type FakeDeepgram = {
+  url: string;
+  received: () => number;
+  connections: () => number;
+  /** Most recent upstream socket, server side. */
+  last: () => ServerSocket | undefined;
+};
+
+/** Fake Deepgram that accepts connections and counts audio bytes it receives. */
+async function acceptingServer(): Promise<FakeDeepgram> {
   let bytes = 0;
+  const sockets: ServerSocket[] = [];
   server = createServer();
   wss = new WebSocketServer({ server });
   wss.on("connection", (ws) => {
+    sockets.push(ws);
     ws.on("message", (data, isBinary) => {
       if (isBinary) bytes += (data as Buffer).byteLength;
     });
@@ -78,6 +89,8 @@ async function acceptingServer(): Promise<{ url: string; received: () => number 
   return {
     url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}`,
     received: () => bytes,
+    connections: () => sockets.length,
+    last: () => sockets.at(-1),
   };
 }
 
@@ -122,10 +135,11 @@ describe("STT daily seconds cap", () => {
     env.DAILY_MAX_STT_SECONDS = 3;
     const fake = await acceptingServer();
     const msgs = open(fake.url, 1);
-    await waitUntil(() => proxy?.ready === true);
-
-    // 2 seconds of budget left = 64_000 bytes; send 20 × 4096 = 81_920.
     const chunk = new ArrayBuffer(4096);
+    proxy!.sendAudio(chunk);
+    await waitUntil(() => fake.received() === 4096);
+
+    // 2 seconds of budget left = 64_000 bytes; 20 more × 4096 overshoots.
     for (let i = 0; i < 20; i++) proxy!.sendAudio(chunk);
     await sleep(100);
 
@@ -140,7 +154,6 @@ describe("STT daily seconds cap", () => {
     env.DAILY_MAX_STT_SECONDS = 3600;
     const fake = await acceptingServer();
     open(fake.url, 0);
-    await waitUntil(() => proxy?.ready === true);
 
     // 1.5 s of audio → rounded up to 2 billable seconds.
     const chunk = new ArrayBuffer(4000);
@@ -158,6 +171,7 @@ describe("Deepgram STT handshake rejections", () => {
     "%i → stt_budget_exhausted (text input) without counting a breaker failure",
     async (code) => {
       const msgs = open(await rejectingServer(code));
+      proxy!.sendAudio(new ArrayBuffer(320));
       await waitUntil(() => msgs.length > 0);
       await sleep(50);
 
@@ -169,6 +183,7 @@ describe("Deepgram STT handshake rejections", () => {
 
   it("other rejections (500) report deepgram_error and count one breaker failure", async () => {
     const msgs = open(await rejectingServer(500));
+    proxy!.sendAudio(new ArrayBuffer(320));
     await waitUntil(() => msgs.length > 0);
     await sleep(50);
 
@@ -178,13 +193,112 @@ describe("Deepgram STT handshake rejections", () => {
     expect(getCircuitSnapshot("deepgram").failures).toBe(1);
   });
 
+  it("402/429 stop reconnect attempts for the rest of the session", async () => {
+    const msgs = open(await rejectingServer(402));
+    proxy!.sendAudio(new ArrayBuffer(320));
+    await waitUntil(() => msgs.length > 0);
+    proxy!.sendAudio(new ArrayBuffer(320));
+    await sleep(50);
+    expect(errorCodes(msgs)).toEqual(["stt_budget_exhausted"]);
+  });
+
   it("closing while still connecting does not report an error", async () => {
     const fake = await acceptingServer();
     const msgs = open(fake.url);
+    proxy!.sendAudio(new ArrayBuffer(320));
     proxy!.close();
     await sleep(100);
 
     expect(errorCodes(msgs)).toEqual([]);
     expect(getCircuitSnapshot("deepgram").failures).toBe(0);
+  });
+});
+
+describe("lazy connect and idle reconnect", () => {
+  it("does not open Deepgram until the first audio frame arrives", async () => {
+    const fake = await acceptingServer();
+    open(fake.url);
+    await sleep(100);
+    expect(fake.connections()).toBe(0);
+    expect(proxy!.ready).toBe(true);
+
+    proxy!.sendAudio(new ArrayBuffer(320));
+    await waitUntil(() => fake.connections() === 1);
+  });
+
+  it("delivers audio sent while the connection is still opening", async () => {
+    const fake = await acceptingServer();
+    open(fake.url);
+    for (let i = 0; i < 5; i++) proxy!.sendAudio(new ArrayBuffer(1000));
+    await waitUntil(() => fake.received() === 5000);
+    expect(fake.connections()).toBe(1);
+  });
+
+  it("caps the pre-connect buffer at ~3 s by dropping the oldest audio", async () => {
+    const fake = await acceptingServer();
+    open(fake.url);
+    // 5 s of audio queued before the socket can open.
+    for (let i = 0; i < 40; i++) proxy!.sendAudio(new ArrayBuffer(4000));
+    await waitUntil(() => fake.received() > 0);
+    await sleep(50);
+    expect(fake.received()).toBe(3 * PCM_BYTES_PER_SECOND);
+  });
+
+  it("reconnects when audio arrives after Deepgram closed an idle stream, without a breaker failure", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const fake = await acceptingServer();
+    const msgs = open(fake.url);
+    proxy!.sendAudio(new ArrayBuffer(320));
+    await waitUntil(() => fake.received() === 320);
+
+    // Mic off for >10 s: Deepgram times the stream out (NET-0001, code 1011).
+    vi.setSystemTime(Date.now() + 12_000);
+    fake.last()!.close(1011, "NET-0001");
+    await sleep(50);
+    expect(getCircuitSnapshot("deepgram").failures).toBe(0);
+
+    proxy!.sendAudio(new ArrayBuffer(640));
+    await waitUntil(() => fake.received() === 960);
+    expect(fake.connections()).toBe(2);
+    expect(errorCodes(msgs)).toEqual([]);
+  });
+
+  it("counts a drop while audio is flowing as a failure and backs off before reconnecting", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const fake = await acceptingServer();
+    open(fake.url);
+    proxy!.sendAudio(new ArrayBuffer(320));
+    await waitUntil(() => fake.received() === 320);
+
+    fake.last()!.close(1011, "internal error");
+    await sleep(50);
+    expect(getCircuitSnapshot("deepgram").failures).toBe(1);
+
+    proxy!.sendAudio(new ArrayBuffer(320));
+    await sleep(50);
+    expect(fake.connections()).toBe(1);
+
+    vi.setSystemTime(Date.now() + 2_500);
+    proxy!.sendAudio(new ArrayBuffer(320));
+    await waitUntil(() => fake.connections() === 2);
+  });
+
+  it("reports deepgram_circuit_open once and does not reconnect while the breaker is open", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const fake = await acceptingServer();
+    const msgs = open(fake.url);
+    proxy!.sendAudio(new ArrayBuffer(320));
+    await waitUntil(() => fake.received() === 320);
+
+    vi.setSystemTime(Date.now() + 12_000);
+    fake.last()!.close(1011, "NET-0001");
+    await sleep(50);
+    for (let i = 0; i < 5; i++) recordFailure("deepgram");
+
+    proxy!.sendAudio(new ArrayBuffer(320));
+    proxy!.sendAudio(new ArrayBuffer(320));
+    await sleep(50);
+    expect(fake.connections()).toBe(1);
+    expect(errorCodes(msgs)).toEqual(["deepgram_circuit_open"]);
   });
 });
