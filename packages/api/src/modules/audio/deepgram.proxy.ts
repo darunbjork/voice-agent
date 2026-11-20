@@ -23,6 +23,12 @@ const DEEPGRAM_WS_URL =
 const PCM_BYTES_PER_SECOND = 32_000;
 /** Persist metered STT seconds this often so concurrent sessions see them. */
 const STT_FLUSH_EVERY_SECONDS = 10;
+/** Audio held while the upstream connection opens (~3 s); oldest dropped beyond. */
+const MAX_PENDING_BYTES = 3 * PCM_BYTES_PER_SECOND;
+/** A close this long after the last audio frame is Deepgram's idle timeout, not a fault. */
+const IDLE_CLOSE_THRESHOLD_MS = 5_000;
+/** Wait before reconnecting after a failed connection. */
+const RECONNECT_BACKOFF_MS = 2_000;
 
 const TEXT_INPUT_FALLBACK_MESSAGE =
   "Speech recognition is temporarily unavailable. Use text input.";
@@ -164,6 +170,13 @@ function createMockProxy(
   };
 }
 
+/**
+ * Live Deepgram proxy. The upstream connection is opened lazily on the first
+ * audio frame (not when the browser connects) and re-opened when audio arrives
+ * after Deepgram closed an idle stream. Deepgram drops a stream that receives
+ * no audio for ~10 s, so connecting eagerly meant a user who waited before
+ * pressing the mic lost every word.
+ */
 function createLiveProxy(
   onTranscript: TranscriptHandler,
   log: FastifyBaseLogger,
@@ -175,20 +188,24 @@ function createLiveProxy(
     throw new Error("DEEPGRAM_API_KEY is required when live speech recognition is enabled");
   }
 
+  /** Session-level: the client ended the session or the budget stopped it. */
   let closed = false;
-  let sawError = false;
-  const startTime = Date.now();
-  let results = 0;
-  let emptyResults = 0;
-  let interims = 0;
-  let finals = 0;
-  /** Set once the handshake was rejected and already reported to the client. */
-  let handshakeHandled = false;
+  let budgetCutoff = false;
+  /** Upstream refused for budget reasons (402/429) — do not reconnect. */
+  let upstreamExhausted = false;
+  let circuitNotified = false;
+  let retryAfter = 0;
+
+  let dg: WebSocket | null = null;
+  let connections = 0;
+  const pending: Buffer[] = [];
+  let pendingBytes = 0;
 
   // STT metering: audio bytes forwarded to Deepgram, persisted in whole seconds.
   let dailySeconds = sttSecondsUsedToday;
   let unflushedBytes = 0;
-  let budgetCutoff = false;
+  /** When audio was last forwarded upstream (or the connection started). */
+  let lastAudioAt = 0;
 
   const flushUsage = (final: boolean): void => {
     const seconds = final
@@ -207,124 +224,187 @@ function createLiveProxy(
       });
   };
 
-  const dg = new WebSocket(endpoint, {
-    headers: {
-      Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
-    },
-  });
+  const forward = (socket: WebSocket, buf: Buffer): void => {
+    socket.send(buf);
+    lastAudioAt = Date.now();
+    unflushedBytes += buf.byteLength;
+    if (unflushedBytes >= STT_FLUSH_EVERY_SECONDS * PCM_BYTES_PER_SECOND) flushUsage(false);
+  };
 
-  // Handshake rejected (e.g. 402 out of credits, 429 rate-limited). Without
-  // this listener ws reports a generic "Unexpected server response" error.
-  dg.on("unexpected-response", (_req, res) => {
-    const status = res.statusCode ?? 0;
-    res.resume();
-    handshakeHandled = true;
-    sawError = true;
-    closed = true;
-    if (isBudgetExhaustedStatus(status)) {
-      // Out of credits / rate-limited is not a provider fault: no breaker count.
-      log.warn({ sessionId, status }, "Deepgram STT budget exhausted — text input only");
-      onTranscript({
-        type: "error",
-        code: "stt_budget_exhausted",
-        message: TEXT_INPUT_FALLBACK_MESSAGE,
-      });
-    } else {
-      recordFailure("deepgram");
-      log.error({ sessionId, status }, "Deepgram handshake rejected");
-      onTranscript({
-        type: "error",
-        code: "deepgram_error",
-        message: `Unexpected server response: ${status}`,
-      });
+  const enqueue = (buf: Buffer): void => {
+    pending.push(buf);
+    pendingBytes += buf.byteLength;
+    while (pendingBytes > MAX_PENDING_BYTES && pending.length > 1) {
+      pendingBytes -= pending.shift()!.byteLength;
     }
-    dg.terminate();
-  });
+  };
 
-  dg.on("open", () => {
-    recordSuccess("deepgram");
-    log.info({ sessionId }, "Deepgram live WebSocket open");
-  });
-
-  dg.on("message", (data: WebSocket.RawData) => {
-    if (closed) return;
+  const connect = (): WebSocket | null => {
     try {
-      const msg = JSON.parse(data.toString()) as {
-        type?: string;
-        is_final?: boolean;
-        speech_final?: boolean;
-        channel?: {
-          alternatives?: Array<{ transcript?: string }>;
-        };
-      };
-
-      if (msg.type !== "Results") return;
-
-      results += 1;
-
-      const transcript = msg.channel?.alternatives?.[0]?.transcript?.trim() ?? "";
-      if (!transcript) {
-        emptyResults += 1;
-        if (emptyResults === 1) {
-          log.info(
-            { sessionId },
-            "Deepgram first empty transcript — mic audio was silent or unrecognisable",
-          );
-        }
-        return;
-      }
-
-      if (msg.is_final || msg.speech_final) {
-        finals += 1;
+      assertCircuitClosed("deepgram");
+    } catch (err) {
+      if (!(err instanceof CircuitOpenError)) throw err;
+      if (!circuitNotified) {
+        circuitNotified = true;
+        log.warn({ sessionId }, "STT circuit open — not reconnecting");
         onTranscript({
-          type: "transcript_final",
-          text: transcript,
-          latencyMs: Date.now() - startTime,
+          type: "error",
+          code: "deepgram_circuit_open",
+          message: TEXT_INPUT_FALLBACK_MESSAGE,
+        });
+      }
+      return null;
+    }
+    circuitNotified = false;
+
+    connections += 1;
+    const attempt = connections;
+    const startTime = Date.now();
+    lastAudioAt = startTime;
+    let results = 0;
+    let emptyResults = 0;
+    let interims = 0;
+    let finals = 0;
+    /** This connection already reported/handled its own end. */
+    let settled = false;
+
+    const socket = new WebSocket(endpoint, {
+      headers: {
+        Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
+      },
+    });
+
+    const fail = (message: string): void => {
+      settled = true;
+      retryAfter = Date.now() + RECONNECT_BACKOFF_MS;
+      recordFailure("deepgram");
+      onTranscript({ type: "error", code: "deepgram_error", message });
+    };
+
+    // Handshake rejected (e.g. 402 out of credits, 429 rate-limited). Without
+    // this listener ws reports a generic "Unexpected server response" error.
+    socket.on("unexpected-response", (_req, res) => {
+      const status = res.statusCode ?? 0;
+      res.resume();
+      pending.length = 0;
+      pendingBytes = 0;
+      if (isBudgetExhaustedStatus(status)) {
+        // Out of credits / rate-limited is not a provider fault: no breaker count.
+        settled = true;
+        upstreamExhausted = true;
+        log.warn({ sessionId, status }, "Deepgram STT budget exhausted — text input only");
+        onTranscript({
+          type: "error",
+          code: "stt_budget_exhausted",
+          message: TEXT_INPUT_FALLBACK_MESSAGE,
         });
       } else {
-        interims += 1;
-        onTranscript({
-          type: "transcript_interim",
-          text: transcript,
-        });
+        log.error({ sessionId, status }, "Deepgram handshake rejected");
+        fail(`Unexpected server response: ${status}`);
       }
-    } catch (err) {
-      log.error({ err, sessionId }, "Failed to parse Deepgram message");
-    }
-  });
-
-  dg.on("error", (err) => {
-    // Already reported (rejected handshake) or we closed it ourselves.
-    if (handshakeHandled || closed) return;
-    sawError = true;
-    recordFailure("deepgram");
-    log.error({ err, sessionId }, "Deepgram WebSocket error");
-    onTranscript({
-      type: "error",
-      code: "deepgram_error",
-      message: err.message,
+      socket.terminate();
     });
-  });
 
-  dg.on("close", () => {
-    flushUsage(true);
-    log.info({ results, emptyResults, interims, finals }, "Deepgram WebSocket closed");
-    if (!closed && !sawError) {
-      // Server dropped us mid-session — already counted if "error" fired.
-      recordFailure("deepgram");
-    }
-    closed = true;
-  });
+    socket.on("open", () => {
+      recordSuccess("deepgram");
+      log.info({ sessionId, attempt, buffered: pendingBytes }, "Deepgram live WebSocket open");
+      if (closed || budgetCutoff) {
+        socket.close();
+        return;
+      }
+      for (const buf of pending.splice(0)) forward(socket, buf);
+      pendingBytes = 0;
+    });
+
+    socket.on("message", (data: WebSocket.RawData) => {
+      if (closed) return;
+      try {
+        const msg = JSON.parse(data.toString()) as {
+          type?: string;
+          is_final?: boolean;
+          speech_final?: boolean;
+          channel?: {
+            alternatives?: Array<{ transcript?: string }>;
+          };
+        };
+
+        if (msg.type !== "Results") return;
+
+        results += 1;
+
+        const transcript = msg.channel?.alternatives?.[0]?.transcript?.trim() ?? "";
+        if (!transcript) {
+          emptyResults += 1;
+          if (emptyResults === 1) {
+            log.info(
+              { sessionId },
+              "Deepgram first empty transcript — mic audio was silent or unrecognisable",
+            );
+          }
+          return;
+        }
+
+        if (msg.is_final || msg.speech_final) {
+          finals += 1;
+          onTranscript({
+            type: "transcript_final",
+            text: transcript,
+            latencyMs: Date.now() - startTime,
+          });
+        } else {
+          interims += 1;
+          onTranscript({
+            type: "transcript_interim",
+            text: transcript,
+          });
+        }
+      } catch (err) {
+        log.error({ err, sessionId }, "Failed to parse Deepgram message");
+      }
+    });
+
+    socket.on("error", (err) => {
+      // Already handled (rejected handshake) or we closed it ourselves.
+      if (settled || closed) return;
+      log.error({ err, sessionId }, "Deepgram WebSocket error");
+      fail(err.message);
+    });
+
+    socket.on("close", (code: number) => {
+      flushUsage(true);
+      if (dg === socket) dg = null;
+      const idleMs = Date.now() - lastAudioAt;
+      log.info(
+        { sessionId, attempt, code, idleMs, results, emptyResults, interims, finals },
+        "Deepgram WebSocket closed",
+      );
+      if (settled || closed || budgetCutoff) return;
+      // Deepgram closes streams that stop receiving audio (mic off). That is
+      // expected; the next audio frame reconnects. Only a drop while audio
+      // was flowing counts as a provider failure.
+      if (code !== 1000 && idleMs < IDLE_CLOSE_THRESHOLD_MS) {
+        retryAfter = Date.now() + RECONNECT_BACKOFF_MS;
+        recordFailure("deepgram");
+      }
+    });
+
+    return socket;
+  };
 
   const close = (): void => {
     if (closed) return;
     closed = true;
+    pending.length = 0;
+    pendingBytes = 0;
     flushUsage(true);
-    if (dg.readyState === WebSocket.OPEN) {
-      dg.send(JSON.stringify({ type: "CloseStream" }));
-      dg.close();
-    } else if (dg.readyState === WebSocket.CONNECTING) {
-      dg.terminate();
+    const socket = dg;
+    dg = null;
+    if (!socket) return;
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "CloseStream" }));
+      socket.close();
+    } else if (socket.readyState === WebSocket.CONNECTING) {
+      socket.terminate();
     }
   };
 
@@ -343,20 +423,35 @@ function createLiveProxy(
   };
 
   return {
+    /** True while the proxy still accepts audio (it connects on demand). */
     get ready() {
-      return !closed && dg.readyState === WebSocket.OPEN;
+      return !closed && !budgetCutoff && !upstreamExhausted;
     },
 
     sendAudio(chunk: ArrayBuffer): void {
-      if (closed || budgetCutoff || dg.readyState !== WebSocket.OPEN) return;
-      const pendingSeconds = (unflushedBytes + chunk.byteLength) / PCM_BYTES_PER_SECOND;
+      if (closed || budgetCutoff || upstreamExhausted) return;
+      const pendingSeconds =
+        (unflushedBytes + pendingBytes + chunk.byteLength) / PCM_BYTES_PER_SECOND;
       if (dailySeconds + pendingSeconds > getDailyLimits().sttSeconds) {
         cutOffForBudget();
         return;
       }
-      dg.send(Buffer.from(chunk));
-      unflushedBytes += chunk.byteLength;
-      if (unflushedBytes >= STT_FLUSH_EVERY_SECONDS * PCM_BYTES_PER_SECOND) flushUsage(false);
+
+      const buf = Buffer.from(chunk);
+      if (dg?.readyState === WebSocket.OPEN) {
+        forward(dg, buf);
+        return;
+      }
+      if (dg?.readyState === WebSocket.CONNECTING) {
+        enqueue(buf);
+        return;
+      }
+      // No upstream (never opened, or Deepgram closed an idle stream).
+      if (Date.now() < retryAfter) return;
+      const socket = connect();
+      if (!socket) return;
+      dg = socket;
+      enqueue(buf);
     },
 
     close,
