@@ -6,11 +6,11 @@ Local development defaults to `VOICE_MOCK=true`, which makes no provider calls a
 
 ## Providers and free tiers
 
-| Provider   | Used for                        | Model / voice                                         | Free-tier notes                                                                 |
-| ---------- | ------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Deepgram   | Speech-to-text, fallback TTS    | `nova-2` (STT), `aura-asteria-en` (Aura TTS fallback) | Free credit balance; an exhausted balance or rate limit returns `402` / `429`  |
-| Gemini     | Reasoning                       | `gemini-3.1-flash-lite-preview` (`GEMINI_MODEL`)      | Free tier is rate-limited per model; Google rotates preview model ids          |
-| ElevenLabs | Primary TTS                     | `eleven_turbo_v2_5`, voice Lily (`pFZP5JQG7iQjIQuC4Bku`) | Small monthly character quota; library voices return `402`/`404` on the free plan, so a premade voice is used. Exhausted credits come back as `401 quota_exceeded` |
+| Provider   | Used for                     | Model / voice                                            | Free-tier notes                                                                                                                                                    |
+| ---------- | ---------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Deepgram   | Speech-to-text, fallback TTS | `nova-2` (STT), `aura-asteria-en` (Aura TTS fallback)    | Free credit balance; an exhausted balance or rate limit returns `402` / `429`                                                                                      |
+| Gemini     | Reasoning                    | `gemini-3.1-flash-lite-preview` (`GEMINI_MODEL`)         | Free tier is rate-limited per model; Google rotates preview model ids                                                                                              |
+| ElevenLabs | Primary TTS                  | `eleven_turbo_v2_5`, voice Lily (`pFZP5JQG7iQjIQuC4Bku`) | Small monthly character quota; library voices return `402`/`404` on the free plan, so a premade voice is used. Exhausted credits come back as `401 quota_exceeded` |
 
 Exact quotas change; check each provider's pricing page before relying on a number:
 [Deepgram](https://deepgram.com/pricing) · [Gemini](https://ai.google.dev/pricing) · [ElevenLabs](https://elevenlabs.io/pricing).
@@ -19,11 +19,11 @@ Exact quotas change; check each provider's pricing page before relying on a numb
 
 The app keeps its own daily counters (UTC day, in Redis, or in memory when `REDIS_URL` is unset) so it stops before the provider does. Defaults are in [`packages/api/src/env.ts`](../packages/api/src/env.ts).
 
-| Variable                | Default | What is counted                         | Over the cap                                                                 |
-| ----------------------- | ------- | --------------------------------------- | ---------------------------------------------------------------------------- |
-| `DAILY_MAX_TOKENS`      | 50,000  | Estimated Gemini tokens (chars ÷ 4)     | Turn refused: `429 budget_exceeded` + `Retry-After: 3600` (HTTP), `budget_exceeded` error (WS) |
-| `DAILY_MAX_TTS_CHARS`   | 650     | ElevenLabs characters, reserved up front | Reply is spoken by Deepgram Aura instead                                     |
-| `DAILY_MAX_STT_SECONDS` | 3600    | Seconds of live audio sent to Deepgram  | `stt_budget_exhausted`; the client switches to text input (also mid-session) |
+| Variable                | Default | What is counted                          | Over the cap                                                                                   |
+| ----------------------- | ------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `DAILY_MAX_TOKENS`      | 50,000  | Estimated Gemini tokens (chars ÷ 4)      | Turn refused: `429 budget_exceeded` + `Retry-After: 3600` (HTTP), `budget_exceeded` error (WS) |
+| `DAILY_MAX_TTS_CHARS`   | 650     | ElevenLabs characters, reserved up front | Reply is spoken by Deepgram Aura instead                                                       |
+| `DAILY_MAX_STT_SECONDS` | 3600    | Seconds of live audio sent to Deepgram   | `stt_budget_exhausted`; the client switches to text input (also mid-session)                   |
 
 - The token cap is checked on both the HTTP text route (`costGuard`) and the audio WebSocket, through the same `checkDailyTokenBudget` function.
 - At 80% of `DAILY_MAX_TOKENS` a structured-log alert is emitted (and sent to Sentry when `SENTRY_DSN` is set).
