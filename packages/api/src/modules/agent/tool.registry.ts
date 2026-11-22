@@ -15,6 +15,8 @@ export type ToolResult = {
   replyHint: string | null;
   /** Translate only: what is known so far when the tool had to ask. */
   pending?: Record<string, string>;
+  /** Weather only: the reply asks which city. */
+  needsCity?: boolean;
 };
 
 export type ToolHandler = (input: ToolInput) => Promise<ToolResult>;

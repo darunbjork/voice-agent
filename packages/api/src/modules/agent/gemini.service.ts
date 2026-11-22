@@ -25,7 +25,8 @@ Return JSON with "reply", "intent" and "card".
 
 Pick exactly one intent:
 - "general": factual or everyday questions (facts, numbers, definitions, people, places, dates, "what day is it"). Answer in 1-2 short sentences. card: null.
-- "weather", "reminder", "translate", "summarize": the user asks for that task. Include the matching card only if you can fill every field, otherwise card: null.
+- "weather", "reminder", "translate": the user asks for that task. The app runs the real tool and fills in the data. In the card put only what the user said (weather: "location"; translate: "original", "toLang", "fromLang"; reminder: "note", "time") and "" in every other field, or card: null. Never write weather values, translations or reminder confirmations yourself.
+- "summarize": the user asks for a summary. Include the summary card only if you can fill every field, otherwise card: null.
 - "help": only when the user asks what you can do.
 - "fallback": only when the request is unintelligible. Never use it for a question you can answer.
 
