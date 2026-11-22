@@ -25,7 +25,7 @@ export async function reminderTool(input: ReminderToolInput): Promise<ReminderTo
   if (env.VOICE_MOCK) {
     return {
       card,
-      replyHint: `Demo mode: I would ${reminderAction(note, time)}, but this reminder was not saved.`,
+      replyHint: `Demo mode: this reminder was not saved: ${reminderSummary(note, time)}. ${NO_ALERTS}`,
     };
   }
 
@@ -47,13 +47,19 @@ export async function reminderTool(input: ReminderToolInput): Promise<ReminderTo
 
   return {
     card,
-    replyHint: `Okay, I will ${reminderAction(note, time)}.`,
+    replyHint: `I saved a reminder ${reminderSummary(note, time)}. ${NO_ALERTS}`,
   };
 }
 
-function reminderAction(note: string, time: string): string {
+/**
+ * A saved reminder is a note: there is no scheduler and no push notification,
+ * so nothing fires at the due time. Never promise that it will.
+ */
+const NO_ALERTS = "I can't send notifications, so nothing will alert you when it is due.";
+
+function reminderSummary(note: string, time: string): string {
   if (/^(?:I|we|you|they)\b/i.test(note)) {
-    return `remind you ${time} that ${note}`;
+    return `that ${note}, ${time}`;
   }
-  return `remind you to ${note} ${time}`;
+  return `to ${note} ${time}`;
 }

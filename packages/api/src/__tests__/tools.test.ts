@@ -195,7 +195,7 @@ describe("tool handlers", () => {
     const r = await reminderTool({ userText: text, slots: fast?.slots ?? {} });
     expect(r.card.note).toBe("I have a meeting");
     expect(r.card.time).toBe("Monday");
-    expect(r.replyHint).toContain("remind you Monday that I have a meeting");
+    expect(r.replyHint).toContain("that I have a meeting, Monday");
   });
 
   it("summarize strips the command prefix from points and source", async () => {

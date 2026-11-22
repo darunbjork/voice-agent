@@ -232,7 +232,9 @@ describe("reminder tool (live mode, real database)", () => {
       slots: {},
     });
     expect(r.card.note).toBe("water the plants");
-    expect(r.replyHint).toBe("Okay, I will remind you to water the plants tomorrow.");
+    expect(r.replyHint).toBe(
+      "I saved a reminder to water the plants tomorrow. I can't send notifications, so nothing will alert you when it is due.",
+    );
 
     const prisma = getPrisma();
     const row = await prisma.reminder.findFirst({

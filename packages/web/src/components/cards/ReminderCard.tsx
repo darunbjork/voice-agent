@@ -44,6 +44,9 @@ export function ReminderCard({ card }: ReminderCardProps) {
         >
           {card.time}
         </p>
+        <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--muted)" }}>
+          Saved note · no alert
+        </p>
       </div>
     </article>
   );
