@@ -26,7 +26,9 @@ describe("WebSocket /api/ws/audio (mock mode)", () => {
     const messages: unknown[] = [];
 
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws/audio`);
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws/audio`, {
+        headers: { Origin: "http://localhost:5173" },
+      });
 
       ws.on("open", () => {
         const silent = new ArrayBuffer(320);
@@ -68,7 +70,9 @@ describe("WebSocket /api/ws/audio (mock mode)", () => {
     const messages: unknown[] = [];
 
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws/audio`);
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws/audio`, {
+        headers: { Origin: "http://localhost:5173" },
+      });
 
       ws.on("open", () => {
         ws.send(

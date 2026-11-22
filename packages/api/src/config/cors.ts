@@ -14,3 +14,13 @@ export function getCorsOrigin(): string | string[] | boolean {
   if (list.length === 0) return false;
   return list;
 }
+
+/**
+ * CORS does not apply to WebSocket upgrades, so the audio socket checks the
+ * Origin itself. Browsers always send it; a missing Origin is rejected too.
+ */
+export function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return false;
+  const allowed = getCorsOrigin();
+  return Array.isArray(allowed) && allowed.includes(origin);
+}

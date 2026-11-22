@@ -103,7 +103,9 @@ describe("daily token guard on both entry points", () => {
     const messages: Array<{ type: string; code?: string }> = [];
 
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws/audio`);
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws/audio`, {
+        headers: { Origin: "http://localhost:5173" },
+      });
       ws.on("open", () => {
         ws.send(JSON.stringify({ type: "text_input", text: "What is the weather in Stockholm?" }));
       });

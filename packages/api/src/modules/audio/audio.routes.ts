@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyPluginOptions } from "fastify";
+import type { FastifyInstance, FastifyPluginOptions, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
 import { createDeepgramProxy, handleControlMessage, type DeepgramProxy } from "./deepgram.proxy.js";
@@ -16,12 +16,30 @@ import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared
 import { isTurnAborted } from "../../utils/turn-abort.js";
 import { checkDailyTokenBudget } from "../../middleware/cost.guard.js";
 import { getDailyUsage } from "../../utils/usage-tracker.js";
+import { isAllowedOrigin } from "../../config/cors.js";
 
 const MAX_PCM_CHUNK_BYTES = 4096;
+/** Same cap as the HTTP text route (agent.routes.ts maxLength). */
+export const TEXT_INPUT_MAX_CHARS = 500;
+/** ws closes the socket (1009) on a larger frame. PCM frames are ≤ 4 KiB, text_input ≤ ~2 KiB. */
+export const WS_MAX_PAYLOAD_BYTES = 16 * 1024;
 export const turnLimits = {
   /** Hard ceiling for one turn; the LLM call itself gives up well before this. */
   timeoutMs: 25_000,
 };
+export const wsLimits = {
+  /** Mic audio is ~31 frames/s (512 samples @ 16 kHz); this leaves 3x headroom. */
+  maxMessagesPerSecond: 100,
+};
+
+/** Runs before the upgrade: replying here means the socket is never opened. */
+async function rejectForeignOrigin(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (isAllowedOrigin(request.headers.origin)) return;
+  request.log.warn({ origin: request.headers.origin ?? null }, "WS upgrade origin rejected");
+  await reply.code(403).send({ error: "origin_not_allowed" });
+}
+
+const wsRoute = { websocket: true, preValidation: rejectForeignOrigin } as const;
 
 /** Abort reason for a turn whose text was merged into the next utterance. */
 const MERGED = "merged_with_next_utterance";
@@ -43,7 +61,7 @@ export async function audioRoutes(
   app: FastifyInstance,
   _opts: FastifyPluginOptions,
 ): Promise<void> {
-  app.get("/api/ws/audio", { websocket: true }, (socket: WebSocket, request): void => {
+  app.get("/api/ws/audio", wsRoute, (socket: WebSocket, request): void => {
     const ephemeralId = randomUUID();
     const log = request.log.child({
       sessionId: ephemeralId,
@@ -341,6 +359,18 @@ export async function audioRoutes(
       try {
         const msg = JSON.parse(raw.toString()) as ClientAudioMessage;
 
+        if (
+          msg.type === "text_input" &&
+          (typeof msg.text !== "string" || msg.text.length > TEXT_INPUT_MAX_CHARS)
+        ) {
+          sendSafe({
+            type: "error",
+            code: "text_too_long",
+            message: `Text input is limited to ${TEXT_INPUT_MAX_CHARS} characters.`,
+          });
+          return;
+        }
+
         if (msg.type === "barge_in") {
           // Stop the agent talking. A turn still being answered is kept so
           // the user's question still gets its (visible) reply.
@@ -368,7 +398,30 @@ export async function audioRoutes(
       }
     };
 
+    // Per-connection flood guard (fixed 1 s window), counted on arrival.
+    let windowStart = Date.now();
+    let windowCount = 0;
+    let rateLimited = false;
+
     socket.on("message", (raw: Buffer | ArrayBuffer | Buffer[], isBinary: boolean): void => {
+      if (rateLimited) return;
+      const now = Date.now();
+      if (now - windowStart >= 1000) {
+        windowStart = now;
+        windowCount = 0;
+      }
+      windowCount += 1;
+      if (windowCount > wsLimits.maxMessagesPerSecond) {
+        rateLimited = true;
+        log.warn({ limit: wsLimits.maxMessagesPerSecond }, "WS message rate exceeded — closing");
+        sendSafe({
+          type: "error",
+          code: "rate_limited",
+          message: "Too many messages. Please reconnect.",
+        });
+        socket.close(1008, "rate_limited");
+        return;
+      }
       void setupDone.then(() => handleClientMessage(raw, isBinary));
     });
 

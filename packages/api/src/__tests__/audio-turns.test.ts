@@ -59,7 +59,9 @@ describe("audio WebSocket turns always end in a reply or a visible error", () =>
     ms: number,
   ): Promise<Msg[]> {
     const msgs: Msg[] = [];
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws/audio`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws/audio`, {
+      headers: { Origin: "http://localhost:5173" },
+    });
     ws.on("message", (data, isBinary) => {
       if (!isBinary) msgs.push(JSON.parse(data.toString()) as Msg);
     });

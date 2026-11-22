@@ -24,6 +24,8 @@ export default defineConfig({
       JWT_SECRET: "test_secret_that_is_at_least_32_characters_long",
       PORT: "3001",
       FRONTEND_URL: "http://localhost:5173",
+      // The audio WebSocket rejects upgrades from origins outside this list.
+      CORS_ORIGINS: "http://localhost:5173",
     },
     testTimeout: 10_000,
   },
