@@ -50,6 +50,8 @@ const cards: Array<{ card: ResponseCard; assert: () => void }> = [
         screen.getByText("Call the accountant before the quarterly filing deadline"),
       ).toBeTruthy();
       expect(screen.getByText("tomorrow at 09:30")).toBeTruthy();
+      // Saved notes only: nothing fires at the due time.
+      expect(screen.getByText("Saved note · no alert")).toBeTruthy();
     },
   },
   {

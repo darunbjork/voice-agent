@@ -14,8 +14,8 @@ const COMMANDS: HelpCard["commands"] = [
   {
     name: "reminder",
     description: env.VOICE_MOCK
-      ? "Preview a reminder (not saved while demo mode is on)"
-      : 'Save a reminder (e.g. "remind me to call the recruiter")',
+      ? "Preview a reminder (not saved while demo mode is on, no alerts)"
+      : 'Save a reminder note, no alerts (e.g. "remind me to call the recruiter")',
   },
   {
     name: "translate",
