@@ -16,7 +16,7 @@ import { agentRoutes } from "./modules/agent/agent.routes.js";
 import { BudgetExceededError } from "./utils/token-budget.js";
 import prismaPlugin from "./plugins/prisma.plugin.js";
 import redisPlugin from "./plugins/redis.plugin.js";
-import { audioRoutes } from "./modules/audio/audio.routes.js";
+import { audioRoutes, WS_MAX_PAYLOAD_BYTES } from "./modules/audio/audio.routes.js";
 import { initSentry } from "./sentry.js";
 import { sessionRoutes } from "./modules/session/session.routes.js";
 import { adminRoutes } from "./modules/admin/admin.routes.js";
@@ -63,7 +63,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     timeWindow: "1 minute",
   });
 
-  await app.register(fastifyWebsocket);
+  await app.register(fastifyWebsocket, { options: { maxPayload: WS_MAX_PAYLOAD_BYTES } });
 
   await app.register(fastifySwagger, {
     openapi: {
