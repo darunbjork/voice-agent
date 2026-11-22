@@ -10,6 +10,7 @@ import fastifySwaggerUi from "@fastify/swagger-ui";
 
 import { env } from "./env.js";
 import { getCorsOrigin } from "./config/cors.js";
+import { clientIp } from "./config/client-ip.js";
 import { correlationIdHook } from "./middleware/correlation-id.js";
 import { healthRoutes } from "./modules/health/health.routes.js";
 import { agentRoutes } from "./modules/agent/agent.routes.js";
@@ -33,7 +34,8 @@ export async function buildApp(): Promise<FastifyInstance> {
             },
           }
         : { level: env.NODE_ENV === "production" ? "info" : "debug" },
-    trustProxy: true,
+    // X-Forwarded-For is client-controlled; rate limits use clientIp() instead.
+    trustProxy: false,
   });
 
   await app.register(fastifyHelmet, {
@@ -61,6 +63,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(fastifyRateLimit, {
     max: 200,
     timeWindow: "1 minute",
+    keyGenerator: clientIp,
   });
 
   await app.register(fastifyWebsocket, { options: { maxPayload: WS_MAX_PAYLOAD_BYTES } });
@@ -106,6 +109,16 @@ export async function buildApp(): Promise<FastifyInstance> {
     if (err.validation !== undefined) {
       await reply.status(400).send({
         error: "validation_error",
+        message: err.message,
+        correlationId: request.correlationId,
+      });
+      return;
+    }
+    // Plugin errors that carry a client status (rate limit 429, bad body 4xx)
+    // keep it; without this a rate-limited request answered 500.
+    if (typeof err.statusCode === "number" && err.statusCode >= 400 && err.statusCode < 500) {
+      await reply.status(err.statusCode).send({
+        error: err.statusCode === 429 ? "rate_limited" : (err.code ?? "bad_request"),
         message: err.message,
         correlationId: request.correlationId,
       });

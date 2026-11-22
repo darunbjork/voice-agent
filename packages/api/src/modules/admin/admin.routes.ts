@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyPluginOptions } from "fastify";
 import { listSessions, getSessionWithTurns, getUsageSummary } from "./admin.service.js";
 import { basicAuthGuard } from "../../middleware/basic-auth.guard.js";
+import { clientIp } from "../../config/client-ip.js";
 
 interface ListQuery {
   limit?: number;
@@ -54,6 +55,7 @@ export async function adminRoutes(
     await admin.register(import("@fastify/rate-limit"), {
       max: 60,
       timeWindow: "1 minute",
+      keyGenerator: clientIp,
     });
 
     admin.addHook("preHandler", basicAuthGuard);

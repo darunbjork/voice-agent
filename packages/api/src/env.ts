@@ -67,6 +67,8 @@ export const envSchema = z.object({
   FRONTEND_URL: z.string().url().default("http://localhost:5173"),
   CORS_ORIGINS: z.string().optional(),
   SENTRY_DSN: z.string().optional().default(""),
+  // Set by the Fly.io runtime on every machine. Enables the Fly-Client-IP header.
+  FLY_APP_NAME: z.string().optional().default(""),
 });
 
 export type Env = z.infer<typeof envSchema>;
