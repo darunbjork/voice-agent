@@ -14,11 +14,14 @@ import {
 } from "./translate-request.js";
 import {
   setPendingTranslation,
+  setPendingWeather,
   takePendingTranslation,
+  takePendingWeather,
   type PendingTranslation,
 } from "./pending-requests.js";
 import { safeGenerateAgentOutput } from "./gemini.service.js";
-import { runTool } from "./tool.registry.js";
+import { runTool, type ToolResult } from "./tool.registry.js";
+import { cleanLocation, extractWeatherLocation } from "./location.js";
 import { incrementUsage } from "../../utils/usage-tracker.js";
 import type { SessionContextTurn } from "../session/session.service.js";
 import { assertNotAborted } from "../../utils/turn-abort.js";
@@ -137,6 +140,79 @@ function meaningLooksLikeTranslation(phrase: string, context: SessionContextTurn
   return context.slice(-4).some((t) => t.role === "agent" && t.intent === "translate");
 }
 
+/** Starts that make an utterance a question or command, not a place name. */
+const NOT_A_PLACE =
+  /^(?:what|how|why|who|when|where|which|can|could|would|will|should|is|are|do|does|did|tell|explain|give|show|summari[sz]e|translate|remind)\b/i;
+const CANCEL = /^(?:no|nope|nothing|cancel|stop|never\s*mind|forget\s+it|skip(?:\s+it)?)\b/i;
+
+/**
+ * A short answer to "Which city?" ("Paris", "in New York please"), or null
+ * when the utterance is something else (a question, a cancel, a long sentence).
+ */
+export function placeAnswer(text: string): string | null {
+  const t = text.trim();
+  if (!t || NOT_A_PLACE.test(t) || CANCEL.test(t)) return null;
+  const place = cleanLocation(t);
+  if (!place || place.split(/\s+/).length > 4) return null;
+  return place;
+}
+
+/** Tools whose data (numbers, translations, saved state) the model must never write. */
+const TOOL_DATA_INTENTS: ReadonlySet<IntentType> = new Set(["weather", "translate", "reminder"]);
+
+const nonEmpty = (slots: Record<string, string>): Record<string, string> =>
+  Object.fromEntries(Object.entries(slots).filter(([, v]) => v.trim().length > 0));
+
+/** Turns a tool result into the reply and remembers any question it asked. */
+function applyToolResult(
+  intent: IntentType,
+  result: ToolResult,
+  sessionId: string,
+  request: string,
+): GeminiAgentOutput {
+  if (result.pending && Object.keys(result.pending).length > 0) {
+    setPendingTranslation(sessionId, result.pending);
+  }
+  if (intent === "weather" && result.needsCity) {
+    setPendingWeather(sessionId, { request });
+  }
+  return { reply: result.replyHint ?? "I handled that request.", intent, card: result.card };
+}
+
+/**
+ * The model picked weather / translate / reminder: keep only what it read
+ * from the user (city, phrase and language, task and time) and run the real
+ * tool. Its own card and reply are dropped — live, it invented weather.
+ */
+async function runToolChosenByModel(
+  generated: GeminiAgentOutput,
+  text: string,
+  sessionId: string,
+): Promise<GeminiAgentOutput | null> {
+  const { intent, card } = generated;
+  if (!TOOL_DATA_INTENTS.has(intent)) return null;
+
+  let slots: Record<string, string> = {};
+  if (intent === "weather") {
+    const location =
+      (card?.type === "weather" ? cleanLocation(card.location) : "") ||
+      extractWeatherLocation(text) ||
+      "";
+    if (!location) {
+      setPendingWeather(sessionId, { request: text });
+      return { reply: "Which city would you like the weather for?", intent, card: null };
+    }
+    slots = { location };
+  } else if (intent === "translate" && card?.type === "translate") {
+    slots = nonEmpty({ original: card.original, toLang: card.toLang, fromLang: card.fromLang });
+  } else if (intent === "reminder" && card?.type === "reminder") {
+    slots = nonEmpty({ note: card.note, time: card.time });
+  }
+
+  const result = await runTool(intent, { userText: text, slots });
+  return applyToolResult(intent, result, sessionId, text);
+}
+
 export async function handleUtterance(
   input: HandleUtteranceInput,
   log: FastifyBaseLogger,
@@ -167,6 +243,18 @@ export async function handleUtterance(
       text = completed.text;
       fast = null;
       rewritten = true;
+    }
+  }
+
+  // A weather request we asked "Which city?" about last turn.
+  const pendingWeather = takePendingWeather(input.sessionId);
+  /** Text the tool parses (the original request when a follow-up completes it). */
+  let toolText = text;
+  if (pendingWeather && !fast && !rewritten) {
+    const place = placeAnswer(text);
+    if (place) {
+      fast = { intent: "weather", viaFastPath: true, confidence: 1, slots: { location: place } };
+      toolText = pendingWeather.request;
     }
   }
 
@@ -202,19 +290,11 @@ export async function handleUtterance(
     const toolResult = await runTool(fast.intent, {
       // A conversation summary works on the session transcript, not on the
       // request itself ("summarize everything we discussed").
-      userText: conversationSummary ? conversation : text,
+      userText: conversationSummary ? conversation : toolText,
       slots: fast.slots,
     });
 
-    if (toolResult.pending && Object.keys(toolResult.pending).length > 0) {
-      setPendingTranslation(input.sessionId, toolResult.pending);
-    }
-
-    output = {
-      reply: toolResult.replyHint ?? "I handled that request.",
-      intent,
-      card: toolResult.card,
-    };
+    output = applyToolResult(intent, toolResult, input.sessionId, toolText);
 
     log.info(
       { intent, viaFastPath: true, hasCard: toolResult.card !== null },
@@ -227,7 +307,9 @@ export async function handleUtterance(
 
     const generated = await safeGenerateAgentOutput(promptText, log, undefined, input.signal);
     source = generated.source ?? "none";
-    output = { reply: generated.reply, intent: generated.intent, card: generated.card };
+    const fromTool = await runToolChosenByModel(generated, text, input.sessionId);
+    if (fromTool) source = `${source} → ${generated.intent} tool`;
+    output = fromTool ?? { reply: generated.reply, intent: generated.intent, card: generated.card };
     intent = output.intent;
 
     log.info(

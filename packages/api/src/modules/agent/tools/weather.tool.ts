@@ -19,6 +19,8 @@ export type WeatherToolResult = {
   /** Null when we need the user to name a city first. */
   card: WeatherCard | null;
   replyHint: string;
+  /** The reply asks "which city?": the next short answer completes this request. */
+  needsCity?: boolean;
 };
 
 const FETCH_TIMEOUT_MS = 4000;
@@ -52,6 +54,7 @@ export async function weatherTool(
     return {
       card: null,
       replyHint: `${capitalise(region)} is a big area. Which city in ${region} would you like the weather for?`,
+      needsCity: true,
     };
   }
 
@@ -80,12 +83,14 @@ export async function weatherTool(
       return {
         card: null,
         replyHint: `I could not find ${place} in that country. Which city did you mean?`,
+        needsCity: true,
       };
     }
     if (geo.isRegion) {
       return {
         card: null,
         replyHint: `${geo.name} is a big area. Which city there would you like the weather for?`,
+        needsCity: true,
       };
     }
 
@@ -98,6 +103,7 @@ export async function weatherTool(
         return {
           card: null,
           replyHint: `${geo.name} is a big place. Which city in ${geo.name} would you like the weather for?`,
+          needsCity: true,
         };
       }
       note = `For ${geo.name} I am using the capital, ${capitalGeo.name}. `;
@@ -119,28 +125,12 @@ export async function weatherTool(
       replyHint: `${note}It is ${card.temp} and ${card.desc.toLowerCase()} in ${card.location}.`,
     };
   } catch {
-    const card = offlineCard(location);
+    // No made-up numbers: Open-Meteo is the only source of weather data.
     return {
-      card,
-      replyHint: `I could not reach the weather service for ${location} right now, so this is demo data: it is ${card.temp} and ${card.desc.toLowerCase()}.`,
+      card: null,
+      replyHint: `I could not reach the weather service for ${location} right now. Please try again in a moment.`,
     };
   }
-}
-
-/**
- * Open-Meteo is free and unmetered, so weather never runs behind VOICE_MOCK.
- * This fixture exists only for the case where the network call itself fails.
- */
-function offlineCard(location: string): WeatherCard {
-  return {
-    type: "weather",
-    icon: "☀️",
-    temp: "22°C",
-    desc: "Partly cloudy (demo data)",
-    humidity: "55%",
-    wind: "12 km/h",
-    location,
-  };
 }
 
 function unavailableCard(location: string): WeatherCard {

@@ -94,10 +94,10 @@ describe("weather tool (live mode, stubbed Open-Meteo)", () => {
     );
 
     const r = await weatherTool({ userText: "weather", slots: { location: "Oslo" } });
-    expect(r.replyHint).toContain("could not reach the weather service");
-    expect(r.card!.location).toBe("Oslo");
-    expect(r.card!.desc).toContain("demo data");
-    expect(r.replyHint).toContain("demo data");
+    expect(r.replyHint).toContain("could not reach the weather service for Oslo");
+    // No invented fallback numbers: Open-Meteo is the only weather source.
+    expect(r.card).toBeNull();
+    expect(r.replyHint).not.toMatch(/\d/);
   });
 
   it("maps WMO weather codes to icon and description", () => {
