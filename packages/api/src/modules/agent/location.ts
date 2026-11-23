@@ -326,6 +326,15 @@ const COUNTRY_NAMES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * True for a known country or region name ("France", "UK", "the Middle East").
+ * Used so a place is never read as a target language ("weather in France").
+ */
+export function isCountryOrRegion(name: string): boolean {
+  const key = name.trim().toLowerCase().replace(/\s+/g, " ");
+  return key in COUNTRY_NAMES || key in REGIONS;
+}
+
+/**
  * "Paris, France" / "Paris in France" / "Springfield USA" → { place, countryCode }.
  * A place without a country comes back unchanged.
  */
