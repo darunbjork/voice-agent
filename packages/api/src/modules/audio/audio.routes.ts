@@ -12,7 +12,8 @@ import {
   getRecentContext,
   type SessionContextTurn,
 } from "../session/session.service.js";
-import type { ClientAudioMessage, ServerAudioMessage } from "@voice-agent/shared-types";
+import type { ServerAudioMessage } from "@voice-agent/shared-types";
+import { parseClientControlMessage, TEXT_INPUT_MAX_CHARS } from "@voice-agent/shared-types/schemas";
 import { isTurnAborted } from "../../utils/turn-abort.js";
 import { checkDailyTokenBudget } from "../../middleware/cost.guard.js";
 import { getDailyUsage } from "../../utils/usage-tracker.js";
@@ -20,8 +21,8 @@ import { isAllowedOrigin } from "../../config/cors.js";
 import { captureServerError } from "../../sentry.js";
 
 const MAX_PCM_CHUNK_BYTES = 4096;
-/** Same cap as the HTTP text route (agent.routes.ts maxLength). */
-export const TEXT_INPUT_MAX_CHARS = 500;
+/** Same cap as the HTTP text route (agent.routes.ts maxLength); defined in shared-types. */
+export { TEXT_INPUT_MAX_CHARS };
 /** ws closes the socket (1009) on a larger frame. PCM frames are ≤ 4 KiB, text_input ≤ ~2 KiB. */
 export const WS_MAX_PAYLOAD_BYTES = 16 * 1024;
 export const turnLimits = {
@@ -364,20 +365,16 @@ export async function audioRoutes(
         return;
       }
 
-      try {
-        const msg = JSON.parse(raw.toString()) as ClientAudioMessage;
+      // Every JSON frame is validated against the shared Zod union.
+      const parsed = parseClientControlMessage(raw.toString());
+      if (!parsed.ok) {
+        log.warn({ code: parsed.code, reason: parsed.message }, "Invalid client JSON message");
+        sendSafe({ type: "error", code: parsed.code, message: parsed.message });
+        return;
+      }
 
-        if (
-          msg.type === "text_input" &&
-          (typeof msg.text !== "string" || msg.text.length > TEXT_INPUT_MAX_CHARS)
-        ) {
-          sendSafe({
-            type: "error",
-            code: "text_too_long",
-            message: `Text input is limited to ${TEXT_INPUT_MAX_CHARS} characters.`,
-          });
-          return;
-        }
+      try {
+        const msg = parsed.message;
 
         if (msg.type === "barge_in") {
           // Stop the agent talking. A turn still being answered is kept so
@@ -397,11 +394,11 @@ export async function audioRoutes(
           dbSessionId,
         );
       } catch (err) {
-        log.warn({ err }, "Invalid client JSON message");
+        log.error({ err }, "Client control message failed");
         sendSafe({
           type: "error",
           code: "invalid_message",
-          message: "Could not parse client message",
+          message: "Could not handle client message",
         });
       }
     };
