@@ -24,6 +24,7 @@ import { runTool, type ToolResult } from "./tool.registry.js";
 import { cleanLocation, extractWeatherLocation } from "./location.js";
 import { identityAnswer } from "./app-identity.js";
 import { dateAnswer } from "./date-answers.js";
+import { fitGreetingsToTime } from "./time-of-day.js";
 import type { SessionContextTurn } from "../session/session.service.js";
 import { assertNotAborted } from "../../utils/turn-abort.js";
 
@@ -356,7 +357,12 @@ export async function handleUtterance(
     source = generated.source ?? "none";
     const fromTool = await runToolChosenByModel(generated, text, input.sessionId);
     if (fromTool) source = `${source} → ${generated.intent} tool`;
-    output = fromTool ?? { reply: generated.reply, intent: generated.intent, card: generated.card };
+    output = fromTool ?? {
+      // Only the model's own words: tool replies are data and stay as they are.
+      reply: fitGreetingsToTime(generated.reply, text),
+      intent: generated.intent,
+      card: generated.card,
+    };
     intent = output.intent;
 
     log.info(
