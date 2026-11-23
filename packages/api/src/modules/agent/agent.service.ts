@@ -110,21 +110,45 @@ const WANTS_MEANING =
  * completed translation, a rewritten "what does X mean?" if the user wanted
  * the meaning instead, or null when the new utterance is something else.
  */
+/** The whole answer says "stop": "nothing", "cancel", "never mind", "no thanks". */
+const CANCEL_PENDING =
+  /^(?:no|nope|nothing|none|cancel|stop|never\s*mind|forget\s+(?:it|about\s+it)|skip(?:\s+it)?)(?:[\s,.!]+(?:thanks?|thank\s+you|please))?[\s,.!]*$/i;
+
+/** "no, …" / "actually, …" / "I meant …" in front of a corrected answer. */
+const CORRECTION_LEAD =
+  /^(?:(?:(?:no|nope|sorry|actually|wait|oops|oh)[\s,.!]+)+(?:i\s+meant?\s+|make\s+it\s+|it\s+should\s+be\s+|rather\s+)?|i\s+meant?\s+)/i;
+
+export const TRANSLATE_CANCELLED_REPLY = "Okay, no translation. What else can I help with?";
+
 export function completePendingTranslation(
   pending: PendingTranslation,
   text: string,
   fast: ClassifyResult | null,
-): { kind: "translate"; slots: Record<string, string> } | { kind: "meaning"; text: string } | null {
+):
+  | { kind: "translate"; slots: Record<string, string> }
+  | { kind: "meaning"; text: string }
+  | { kind: "cancel" }
+  | null {
+  const answer = text.trim();
+  // Never translate "nothing" / "cancel": they end the pending request.
+  if (CANCEL_PENDING.test(answer)) return { kind: "cancel" };
+  const corrected = answer.replace(CORRECTION_LEAD, "").trim();
+  const isCorrection = corrected.length > 0 && corrected !== answer;
+  const reply = isCorrection ? corrected : answer;
+
   if (pending.original && !pending.toLang) {
-    if (WANTS_MEANING.test(text.trim())) {
+    if (WANTS_MEANING.test(reply)) {
       return { kind: "meaning", text: `What does "${pending.original}" mean?` };
     }
-    const language = parseLanguageAnswer(text);
+    const language = parseLanguageAnswer(reply);
     return language ? { kind: "translate", slots: { ...pending, toLang: language.name } } : null;
   }
   if (!pending.original && pending.toLang) {
     if (fast && fast.intent !== "translate") return null;
-    const original = cleanPhrase(normaliseTranscript(text));
+    // "No, I meant Spanish": a new language, and the phrase is asked again.
+    const language = isCorrection ? parseLanguageAnswer(reply) : null;
+    if (language) return { kind: "translate", slots: { ...pending, toLang: language.name } };
+    const original = cleanPhrase(normaliseTranscript(reply));
     return original ? { kind: "translate", slots: { ...pending, original } } : null;
   }
   return null;
@@ -250,6 +274,9 @@ export async function handleUtterance(
   const fullTranslate = fast?.intent === "translate" && fast.slots.original && fast.slots.toLang;
   if (pending && !fullTranslate) {
     const completed = completePendingTranslation(pending, text, fast);
+    if (completed?.kind === "cancel") {
+      return buildDirectReply(input, pipelineStart, TRANSLATE_CANCELLED_REPLY, "translate");
+    }
     if (completed?.kind === "translate") {
       fast = translateTurn(completed.slots);
     } else if (completed?.kind === "meaning") {
