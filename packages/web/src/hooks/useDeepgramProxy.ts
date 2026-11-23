@@ -6,7 +6,7 @@ export type ProxyStatus = "disconnected" | "connecting" | "connected" | "reconne
 export type TranscriptHandlers = {
   onSessionId?: (sessionId: string) => void;
   onInterim?: (text: string) => void;
-  onFinal?: (text: string, latencyMs: number) => void;
+  onFinal?: (text: string, latencyMs: number, sinceSpeechEndMs?: number) => void;
   onAgentThinking?: () => void;
   onAgentResponse?: (msg: Extract<ServerAudioMessage, { type: "agent_response" }>) => void;
   onTtsChunk?: (audio: ArrayBuffer, sequenceNum: number) => void;
@@ -88,7 +88,7 @@ export function useDeepgramProxy(options: UseDeepgramProxyOptions) {
         h.onInterim?.(msg.text);
         break;
       case "transcript_final":
-        h.onFinal?.(msg.text, msg.latencyMs);
+        h.onFinal?.(msg.text, msg.latencyMs, msg.sinceSpeechEndMs);
         break;
       case "agent_thinking":
         h.onAgentThinking?.();

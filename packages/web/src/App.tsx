@@ -18,6 +18,7 @@ import { LatencyHUD, type LatencyStage } from "./components/VoiceAgent/LatencyHU
 import type { AgentState } from "./state/agent-state.js";
 import { agentReducer, initialAgentSnapshot } from "./state/agent-state.js";
 import { composeLiveMessage } from "./state/live-message.js";
+import { createTurnClock } from "./state/turn-clock.js";
 import { initialRevealState, revealReducer } from "./state/response-reveal.js";
 import type { ChatMessageModel } from "./types/chat.js";
 import { playFeedbackTone } from "./lib/feedback-tone.js";
@@ -61,6 +62,8 @@ export function App() {
   const [view, setView] = useState<"agent" | "admin">("agent");
   const ttsWaitStartedRef = useRef<number | null>(null);
   const ttsFirstByteRef = useRef<boolean>(false);
+  /** HUD TOTAL: end of speech → first TTS audio byte of the same turn. */
+  const turnClockRef = useRef(createTurnClock());
 
   const appendLog = useCallback((line: string) => {
     setLog((prev) => [line, ...prev].slice(0, 20));
@@ -117,14 +120,16 @@ export function App() {
         dispatchAgent({ type: "CONNECTED" });
       },
       onInterim: (text) => setInterim(text),
-      onFinal: (text, latencyMs) => {
+      onFinal: (text, latencyMs, sinceSpeechEndMs) => {
+        turnClockRef.current.finalReceived(sinceSpeechEndMs);
         inFlightTurnRef.current = null;
         setInterim("");
         pushMessage({ role: "user", text, turnIndex: turnIndexRef.current });
         appendLog(`final (${latencyMs}ms)`);
         dispatchAgent({ type: "TRANSCRIPT_FINAL" });
         setStage("llm");
-        setLatency({ stt: latencyMs, llm: 0, tts: 0, total: latencyMs });
+        // TOTAL stays pending until the first audio byte (end of speech → audio).
+        setLatency({ stt: latencyMs, llm: 0, tts: 0, total: 0 });
         tts.prepare();
       },
       onAgentThinking: () => {
@@ -148,7 +153,7 @@ export function App() {
           stt: msg.reply.latencyMs.stt,
           llm: msg.reply.latencyMs.llm,
           tts: 0,
-          total: msg.reply.latencyMs.stt + msg.reply.latencyMs.llm,
+          total: 0,
         });
         ttsWaitStartedRef.current = performance.now();
         ttsFirstByteRef.current = false;
@@ -167,13 +172,14 @@ export function App() {
           ttsFirstByteRef.current = true;
           dispatchAgent({ type: "TTS_START" });
           setStage(null);
+          const turnTotal = turnClockRef.current.firstAudio();
           setLatency((prev) => {
             if (!prev) return prev;
             return {
               stt: prev.stt,
               llm: prev.llm,
               tts: firstByteMs,
-              total: prev.stt + prev.llm + firstByteMs,
+              total: turnTotal ?? prev.stt + prev.llm + firstByteMs,
             };
           });
         }
