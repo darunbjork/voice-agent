@@ -22,8 +22,8 @@
     "build": { "dependsOn": ["^build"], "outputs": ["dist/**"] },
     "dev": { "dependsOn": ["^build"], "cache": false, "persistent": true },
     "type-check": { "dependsOn": ["^build"], "outputs": [] },
-    "test": { "dependsOn": ["^build"], "outputs": [] },
-    "test:coverage": { "dependsOn": ["^build"], "outputs": [] },
+    "test": { "dependsOn": ["^build"], "outputs": [], "cache": false },
+    "test:coverage": { "dependsOn": ["^build"], "outputs": ["coverage/**"], "cache": false },
     "clean": { "cache": false }
   }
 }
