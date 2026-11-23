@@ -2,7 +2,7 @@ import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import { createClient } from "redis";
 import { env } from "../env.js";
-import { bindRedis } from "../utils/usage-tracker.js";
+import { bindRedis, unbindRedis } from "../utils/usage-tracker.js";
 
 async function redisPlugin(app: FastifyInstance): Promise<void> {
   // REDIS_URL is optional. Deploys without a Redis add-on skip the client;
@@ -25,6 +25,7 @@ async function redisPlugin(app: FastifyInstance): Promise<void> {
     app.log.info("Redis connected");
 
     app.addHook("onClose", async (): Promise<void> => {
+      unbindRedis();
       await redis.quit();
       app.log.info("Redis disconnected");
     });

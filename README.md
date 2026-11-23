@@ -59,7 +59,9 @@ The public demo runs on free provider tiers with no card attached, so when a quo
 | `DAILY_MAX_TTS_CHARS`   | 650     | TTS routed to Deepgram Aura                                                |
 | `DAILY_MAX_STT_SECONDS` | 3600    | `stt_budget_exhausted`, client falls back to text input                    |
 
-A structured-log alert fires at 80% of `DAILY_MAX_TOKENS`.
+A structured-log alert fires at 80% of `DAILY_MAX_TOKENS` (and a Sentry warning when `SENTRY_DSN` is set).
+
+**Where the counters live.** With `REDIS_URL` set, every daily counter (tokens, TTS characters, STT seconds) and the once-a-day 80% alert are stored in Redis: they survive restarts and are shared by every machine. **Without Redis the caps are per machine run** — each machine counts on its own, and a restart (Fly stops idle machines) starts the day again at zero. If Redis becomes unreachable, the app falls back to in-memory counters and logs `usage_redis_fallback`. Circuit breakers and HTTP rate limits are always per machine.
 
 **Fallbacks:**
 
@@ -131,28 +133,28 @@ Local dev without admin: leave it blank. To try it: set it, restart `pnpm turbo 
 
 All variables are validated with Zod in [`packages/api/src/env.ts`](packages/api/src/env.ts). Names and defaults only — never commit values.
 
-| Variable                | Default                         | Notes                                              |
-| ----------------------- | ------------------------------- | -------------------------------------------------- |
-| `PORT`                  | `3001`                          |                                                    |
-| `NODE_ENV`              | `development`                   | `development` · `test` · `production`              |
-| `DATABASE_URL`          | —                               | required                                           |
-| `REDIS_URL`             | —                               | optional; in-memory counters without it            |
-| `VOICE_MOCK`            | `true`                          | `false` calls real providers                       |
-| `DEEPGRAM_LIVE`         | `false`                         | real STT while the rest stays mocked               |
-| `DEEPGRAM_API_KEY`      | —                               | secret                                             |
-| `ELEVENLABS_API_KEY`    | —                               | secret                                             |
-| `ELEVENLABS_VOICE_ID`   | `pFZP5JQG7iQjIQuC4Bku`          | premade "Lily", usable on the ElevenLabs free plan |
-| `GEMINI_API_KEY`        | —                               | secret                                             |
-| `GEMINI_MODEL`          | `gemini-3.1-flash-lite-preview` |                                                    |
-| `DAILY_MAX_TOKENS`      | `50000`                         | must be ≥ 1                                        |
-| `DAILY_MAX_TTS_CHARS`   | `650`                           | `0` disables ElevenLabs for the day                |
-| `DAILY_MAX_STT_SECONDS` | `3600`                          | `0` disables live STT for the day                  |
-| `JWT_SECRET`            | —                               | required, ≥ 32 chars                               |
-| `JWT_EXPIRES_IN`        | `7d`                            |                                                    |
-| `ADMIN_PASSWORD`        | —                               | optional, ≥ 12 chars; blank disables admin         |
-| `FRONTEND_URL`          | `http://localhost:5173`         |                                                    |
-| `CORS_ORIGINS`          | —                               | comma-separated allowlist for production           |
-| `SENTRY_DSN`            | —                               | optional                                           |
+| Variable                | Default                         | Notes                                                   |
+| ----------------------- | ------------------------------- | ------------------------------------------------------- |
+| `PORT`                  | `3001`                          |                                                         |
+| `NODE_ENV`              | `development`                   | `development` · `test` · `production`                   |
+| `DATABASE_URL`          | —                               | required                                                |
+| `REDIS_URL`             | —                               | optional; without it the daily caps are per machine run |
+| `VOICE_MOCK`            | `true`                          | `false` calls real providers                            |
+| `DEEPGRAM_LIVE`         | `false`                         | real STT while the rest stays mocked                    |
+| `DEEPGRAM_API_KEY`      | —                               | secret                                                  |
+| `ELEVENLABS_API_KEY`    | —                               | secret                                                  |
+| `ELEVENLABS_VOICE_ID`   | `pFZP5JQG7iQjIQuC4Bku`          | premade "Lily", usable on the ElevenLabs free plan      |
+| `GEMINI_API_KEY`        | —                               | secret                                                  |
+| `GEMINI_MODEL`          | `gemini-3.1-flash-lite-preview` |                                                         |
+| `DAILY_MAX_TOKENS`      | `50000`                         | must be ≥ 1                                             |
+| `DAILY_MAX_TTS_CHARS`   | `650`                           | `0` disables ElevenLabs for the day                     |
+| `DAILY_MAX_STT_SECONDS` | `3600`                          | `0` disables live STT for the day                       |
+| `JWT_SECRET`            | —                               | required, ≥ 32 chars                                    |
+| `JWT_EXPIRES_IN`        | `7d`                            |                                                         |
+| `ADMIN_PASSWORD`        | —                               | optional, ≥ 12 chars; blank disables admin              |
+| `FRONTEND_URL`          | `http://localhost:5173`         |                                                         |
+| `CORS_ORIGINS`          | —                               | comma-separated allowlist for production                |
+| `SENTRY_DSN`            | —                               | optional                                                |
 
 ## Stack
 
