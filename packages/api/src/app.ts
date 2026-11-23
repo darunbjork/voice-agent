@@ -18,7 +18,7 @@ import { BudgetExceededError } from "./utils/token-budget.js";
 import prismaPlugin from "./plugins/prisma.plugin.js";
 import redisPlugin from "./plugins/redis.plugin.js";
 import { audioRoutes, WS_MAX_PAYLOAD_BYTES } from "./modules/audio/audio.routes.js";
-import { initSentry } from "./sentry.js";
+import { captureServerError, initSentry } from "./sentry.js";
 import { sessionRoutes } from "./modules/session/session.routes.js";
 import { adminRoutes } from "./modules/admin/admin.routes.js";
 
@@ -125,6 +125,11 @@ export async function buildApp(): Promise<FastifyInstance> {
       return;
     }
     request.log.error({ err }, "unhandled error");
+    captureServerError(err, {
+      correlationId: request.correlationId,
+      route: request.routeOptions.url ?? request.url,
+      method: request.method,
+    });
     await reply.status(500).send({
       error: "internal",
       message: "Internal server error",
