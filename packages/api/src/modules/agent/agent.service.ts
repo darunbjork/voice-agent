@@ -253,27 +253,19 @@ export async function handleUtterance(
     return buildEmptyReply(input, pipelineStart);
   }
 
-  // "Who built you?" — a fact about the app, answered from code.
-  const identity = identityAnswer(trimmed);
-  if (identity) {
-    return buildDirectReply(input, pipelineStart, identity, "help");
-  }
-
-  // "How many days until New Year?" — counted in code, not by the model.
-  const dateReply = dateAnswer(trimmed);
-  if (dateReply) {
-    return buildDirectReply(input, pipelineStart, dateReply, "general");
-  }
-
   let text = trimmed;
   let fast = classifyByKeywords(text);
   let rewritten = false;
 
   // A translation we asked a question about last turn ("Which language?").
+  // Handled first: after "What should I translate into French?" the next
+  // utterance is the phrase, even "How many days until Christmas?".
   const pending = takePendingTranslation(input.sessionId);
   const fullTranslate = fast?.intent === "translate" && fast.slots.original && fast.slots.toLang;
+  let pendingHandled = false;
   if (pending && !fullTranslate) {
     const completed = completePendingTranslation(pending, text, fast);
+    pendingHandled = completed !== null;
     if (completed?.kind === "cancel") {
       return buildDirectReply(input, pipelineStart, TRANSLATE_CANCELLED_REPLY, "translate");
     }
@@ -283,6 +275,21 @@ export async function handleUtterance(
       text = completed.text;
       fast = null;
       rewritten = true;
+    }
+  }
+
+  // Not when the utterance is itself a translation ("Translate who built you into French").
+  if (!pendingHandled && !fullTranslate) {
+    // "Who built you?" — a fact about the app, answered from code.
+    const identity = identityAnswer(trimmed);
+    if (identity) {
+      return buildDirectReply(input, pipelineStart, identity, "help");
+    }
+
+    // "How many days until New Year?" — counted in code, not by the model.
+    const dateReply = dateAnswer(trimmed);
+    if (dateReply) {
+      return buildDirectReply(input, pipelineStart, dateReply, "general");
     }
   }
 
