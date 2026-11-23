@@ -195,7 +195,9 @@ function createMockProxy(
         onTranscript({
           type: "transcript_final",
           text: final.text,
+          // Mock STT is not measured; speech "ends" on the chunk that finalises it.
           latencyMs: final.latencyMs,
+          sinceSpeechEndMs: 0,
         });
         utteranceDone = true;
       }
@@ -236,8 +238,38 @@ function createLiveProxy(
 
   let dg: WebSocket | null = null;
   let connections = 0;
-  const pending: Buffer[] = [];
+  /** Frames waiting for the upstream socket, with their arrival time. */
+  const pending: Array<{ buf: Buffer; at: number }> = [];
   let pendingBytes = 0;
+
+  // STT latency is recognition delay only: from the arrival of the audio
+  // frame holding the utterance's last word to the arrival of Deepgram's
+  // final result for it. Deepgram reports word times as offsets into the
+  // current connection's audio, so each forwarded frame is recorded as
+  // (offset in seconds, arrival time).
+  let audioClock: Array<{ offset: number; at: number }> = [];
+  let connectionBytes = 0;
+  /** Arrival of the most recent frame (fallback when a result has no word timings). */
+  let lastFrameAt: number | null = null;
+  /** End of the utterance's last finalised word, and when that final result arrived. */
+  let speechEnd: { at: number; finalAt: number } | null = null;
+
+  const arrivalAt = (offset: number): number | null => {
+    let lo = 0;
+    let hi = audioClock.length - 1;
+    let hit: number | null = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const entry = audioClock[mid]!;
+      if (entry.offset <= offset) {
+        hit = entry.at;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return hit ?? audioClock[0]?.at ?? null;
+  };
 
   // STT metering: audio bytes forwarded to Deepgram, persisted in whole seconds.
   let dailySeconds = sttSecondsUsedToday;
@@ -258,21 +290,30 @@ function createLiveProxy(
     flushTimer = null;
   };
 
-  const emitUtterance = (latencyMs: number): void => {
+  const emitUtterance = (): void => {
     clearFlushTimer();
     if (segments.length === 0) return;
     const text = segments.join(" ");
     segments = [];
     utterances += 1;
-    onTranscript({ type: "transcript_final", text, latencyMs });
+    const now = Date.now();
+    const endedAt = speechEnd?.at ?? lastFrameAt ?? now;
+    const latencyMs = Math.max(1, (speechEnd?.finalAt ?? now) - endedAt);
+    speechEnd = null;
+    onTranscript({
+      type: "transcript_final",
+      text,
+      latencyMs,
+      sinceSpeechEndMs: Math.max(0, now - endedAt),
+    });
   };
 
-  const armFlushFallback = (latencyMs: () => number): void => {
+  const armFlushFallback = (): void => {
     clearFlushTimer();
     if (segments.length === 0) return;
     flushTimer = setTimeout(() => {
       flushTimer = null;
-      if (!closed) emitUtterance(latencyMs());
+      if (!closed) emitUtterance();
     }, UTTERANCE_FLUSH_FALLBACK_MS);
   };
 
@@ -293,7 +334,12 @@ function createLiveProxy(
       });
   };
 
-  const forward = (socket: WebSocket, buf: Buffer): void => {
+  const forward = (socket: WebSocket, buf: Buffer, arrivedAt: number): void => {
+    audioClock.push({ offset: connectionBytes / PCM_BYTES_PER_SECOND, at: arrivedAt });
+    // ~2 min of 32 ms frames; anchors are looked up within seconds of speech.
+    if (audioClock.length > 4000) audioClock.splice(0, audioClock.length - 4000);
+    connectionBytes += buf.byteLength;
+    lastFrameAt = arrivedAt;
     socket.send(buf);
     lastAudioAt = Date.now();
     lastSentAt = lastAudioAt;
@@ -301,11 +347,11 @@ function createLiveProxy(
     if (unflushedBytes >= STT_FLUSH_EVERY_SECONDS * PCM_BYTES_PER_SECOND) flushUsage(false);
   };
 
-  const enqueue = (buf: Buffer): void => {
-    pending.push(buf);
+  const enqueue = (buf: Buffer, at: number): void => {
+    pending.push({ buf, at });
     pendingBytes += buf.byteLength;
     while (pendingBytes > MAX_PENDING_BYTES && pending.length > 1) {
-      pendingBytes -= pending.shift()!.byteLength;
+      pendingBytes -= pending.shift()!.buf.byteLength;
     }
   };
 
@@ -334,7 +380,9 @@ function createLiveProxy(
     lastSentAt = startTime;
     let keepAlive: ReturnType<typeof setInterval> | null = null;
     let keepAlives = 0;
-    const latency = (): number => Date.now() - startTime;
+    // Deepgram's word offsets restart at 0 on every connection.
+    audioClock = [];
+    connectionBytes = 0;
     let results = 0;
     let emptyResults = 0;
     let interims = 0;
@@ -386,7 +434,7 @@ function createLiveProxy(
         socket.close();
         return;
       }
-      for (const buf of pending.splice(0)) forward(socket, buf);
+      for (const frame of pending.splice(0)) forward(socket, frame.buf, frame.at);
       pendingBytes = 0;
 
       // Mic paused: keep the stream open so the next words are not lost to
@@ -410,12 +458,15 @@ function createLiveProxy(
           is_final?: boolean;
           speech_final?: boolean;
           channel?: {
-            alternatives?: Array<{ transcript?: string }>;
+            alternatives?: Array<{
+              transcript?: string;
+              words?: Array<{ start?: number; end?: number }>;
+            }>;
           };
         };
 
         if (msg.type === "UtteranceEnd") {
-          emitUtterance(latency());
+          emitUtterance();
           return;
         }
 
@@ -436,6 +487,16 @@ function createLiveProxy(
         }
 
         if (msg.is_final) {
+          // Speech end = the frame holding this segment's last word.
+          const end = msg.channel?.alternatives?.[0]?.words?.at(-1)?.end;
+          const arrivedAt = Date.now();
+          speechEnd = {
+            at: (typeof end === "number" ? arrivalAt(end) : null) ?? lastFrameAt ?? arrivedAt,
+            finalAt: arrivedAt,
+          };
+        }
+
+        if (msg.is_final) {
           // A finalised segment, not necessarily the end of the utterance.
           finals += 1;
           segments.push(transcript);
@@ -447,7 +508,7 @@ function createLiveProxy(
             text: [...segments, transcript].join(" "),
           });
         }
-        armFlushFallback(latency);
+        armFlushFallback();
       } catch (err) {
         log.error({ err, sessionId }, "Failed to parse Deepgram message");
       }
@@ -463,7 +524,7 @@ function createLiveProxy(
     socket.on("close", (code: number) => {
       if (keepAlive) clearInterval(keepAlive);
       // Speech finalised just before Deepgram closed still counts as a turn.
-      if (!closed) emitUtterance(latency());
+      if (!closed) emitUtterance();
       flushUsage(true);
       if (dg === socket) dg = null;
       const idleMs = Date.now() - lastAudioAt;
@@ -544,12 +605,13 @@ function createLiveProxy(
       }
 
       const buf = Buffer.from(chunk);
+      const arrivedAt = Date.now();
       if (dg?.readyState === WebSocket.OPEN) {
-        forward(dg, buf);
+        forward(dg, buf, arrivedAt);
         return;
       }
       if (dg?.readyState === WebSocket.CONNECTING) {
-        enqueue(buf);
+        enqueue(buf, arrivedAt);
         return;
       }
       // No upstream (never opened, or Deepgram closed an idle stream).
@@ -557,7 +619,7 @@ function createLiveProxy(
       const socket = connect();
       if (!socket) return;
       dg = socket;
-      enqueue(buf);
+      enqueue(buf, arrivedAt);
     },
 
     close,

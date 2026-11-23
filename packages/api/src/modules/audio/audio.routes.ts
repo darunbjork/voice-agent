@@ -52,6 +52,7 @@ export function mergeTranscripts(first: FinalTranscript, next: FinalTranscript):
     type: "transcript_final",
     text: `${first.text} ${next.text}`.replace(/\s+/g, " ").trim(),
     latencyMs: next.latencyMs,
+    ...(next.sinceSpeechEndMs !== undefined ? { sinceSpeechEndMs: next.sinceSpeechEndMs } : {}),
   };
 }
 /** History used for "summarize everything we discussed". */

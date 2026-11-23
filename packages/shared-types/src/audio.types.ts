@@ -24,7 +24,14 @@ export type ServerAudioMessage =
   | {
       type: "transcript_final";
       text: string;
+      /** STT recognition delay: end of the last word → final transcript (ms). */
       latencyMs: number;
+      /**
+       * How long ago speech ended when this message was sent (ms), so the
+       * client can time the turn end of speech → first TTS byte without
+       * comparing clocks. Absent for typed input.
+       */
+      sinceSpeechEndMs?: number;
     }
   | {
       type: "agent_thinking";

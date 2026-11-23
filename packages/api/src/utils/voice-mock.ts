@@ -6,7 +6,7 @@ import type {
   ResponseCard,
 } from "@voice-agent/shared-types";
 
-const MOCK_LATENCY: LatencyBreakdown = {
+export const MOCK_LATENCY: LatencyBreakdown = {
   stt: 42,
   llm: 110,
   tts: 85,
