@@ -23,6 +23,7 @@ import { safeGenerateAgentOutput } from "./gemini.service.js";
 import { runTool, type ToolResult } from "./tool.registry.js";
 import { cleanLocation, extractWeatherLocation } from "./location.js";
 import { identityAnswer } from "./app-identity.js";
+import { dateAnswer } from "./date-answers.js";
 import type { SessionContextTurn } from "../session/session.service.js";
 import { assertNotAborted } from "../../utils/turn-abort.js";
 
@@ -232,6 +233,12 @@ export async function handleUtterance(
   const identity = identityAnswer(trimmed);
   if (identity) {
     return buildDirectReply(input, pipelineStart, identity, "help");
+  }
+
+  // "How many days until New Year?" — counted in code, not by the model.
+  const dateReply = dateAnswer(trimmed);
+  if (dateReply) {
+    return buildDirectReply(input, pipelineStart, dateReply, "general");
   }
 
   let text = trimmed;
