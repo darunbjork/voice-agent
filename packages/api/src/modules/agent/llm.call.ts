@@ -9,6 +9,8 @@ import {
   recordSuccess,
 } from "../../utils/circuit-breaker.js";
 import { groqChat } from "./groq.client.js";
+import { BudgetExceededError, estimateTokens, getDailyLimits } from "../../utils/token-budget.js";
+import { incrementUsage } from "../../utils/usage-tracker.js";
 
 /**
  * Per-attempt ceiling. Live, flash-lite answers in ~1 s, but about 1 in 3
@@ -186,7 +188,66 @@ export async function generateLlm(
     provider === "gemini" ? geminiAttempt(model, request) : groqAttempt(model, request),
   );
   if (attempts.length === 0) throw new LlmUnavailableError([]);
-  return runWithFallback(attempts, options);
+
+  const inputTokens = estimateTokens(request.system) + estimateTokens(request.user);
+  const reserved = await reserveTokens(inputTokens + LLM_RESERVE_REPLY_TOKENS);
+  let result: LlmResult;
+  try {
+    result = await runWithFallback(attempts, options);
+  } catch (err) {
+    // Nothing came back, so nothing is counted against the cap.
+    await settleTokens(reserved, 0, options.log);
+    throw err;
+  }
+  const actual = usageTokens(result.usage) ?? inputTokens + estimateTokens(result.text);
+  await settleTokens(reserved, actual, options.log);
+  return result;
+}
+
+/**
+ * Upper bound reserved for the reply on top of the prompt estimate: a spoken
+ * reply is at most 600 characters (~150 tokens) plus JSON and minimal thinking.
+ */
+export const LLM_RESERVE_REPLY_TOKENS = 300;
+
+/**
+ * Claims `tokens` of today's cap before the call (increment, then check, so
+ * concurrent calls cannot all pass). Throws BudgetExceededError and gives the
+ * claim back when it does not fit.
+ */
+async function reserveTokens(tokens: number): Promise<number> {
+  const limit = getDailyLimits().tokens;
+  const after = await incrementUsage({ tokens });
+  if (after.tokens > limit) {
+    await incrementUsage({ tokens: -tokens });
+    throw new BudgetExceededError("daily", limit, after.tokens);
+  }
+  return tokens;
+}
+
+/** Replaces the reservation with what the call really used. */
+async function settleTokens(
+  reserved: number,
+  actual: number,
+  log?: FastifyBaseLogger,
+): Promise<void> {
+  const delta = actual - reserved;
+  if (delta === 0) return;
+  await incrementUsage({ tokens: delta }).catch((err: unknown) => {
+    log?.warn({ err, reserved, actual }, "token usage settlement failed");
+  });
+}
+
+/** Total tokens from Gemini `usageMetadata` or Groq `usage`; null when absent. */
+export function usageTokens(usage: unknown): number | null {
+  if (usage === null || typeof usage !== "object") return null;
+  const u = usage as Record<string, unknown>;
+  const num = (v: unknown): number | null => (typeof v === "number" && v >= 0 ? v : null);
+  const total = num(u.totalTokenCount) ?? num(u.total_tokens);
+  if (total !== null) return total;
+  const prompt = num(u.prompt_tokens);
+  const completion = num(u.completion_tokens);
+  return prompt !== null && completion !== null ? prompt + completion : null;
 }
 
 type Outcome = "success" | "failure" | "quota" | "cancelled" | "skipped";

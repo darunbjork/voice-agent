@@ -22,7 +22,6 @@ import {
 import { safeGenerateAgentOutput } from "./gemini.service.js";
 import { runTool, type ToolResult } from "./tool.registry.js";
 import { cleanLocation, extractWeatherLocation } from "./location.js";
-import { incrementUsage } from "../../utils/usage-tracker.js";
 import type { SessionContextTurn } from "../session/session.service.js";
 import { assertNotAborted } from "../../utils/turn-abort.js";
 
@@ -338,8 +337,8 @@ export async function handleUtterance(
     turnIndex: input.turnIndex,
   };
 
-  const approxTokens = Math.ceil(trimmed.length / 4) + Math.ceil(output.reply.length / 4) + 100;
-  await incrementUsage({ tokens: approxTokens });
+  // Tokens are reserved and settled by every LLM call (llm.call.ts generateLlm);
+  // tool-only turns use none.
 
   const pipelineMs = Date.now() - pipelineStart;
 
