@@ -17,6 +17,7 @@ import { isTurnAborted } from "../../utils/turn-abort.js";
 import { checkDailyTokenBudget } from "../../middleware/cost.guard.js";
 import { getDailyUsage } from "../../utils/usage-tracker.js";
 import { isAllowedOrigin } from "../../config/cors.js";
+import { captureServerError } from "../../sentry.js";
 
 const MAX_PCM_CHUNK_BYTES = 4096;
 /** Same cap as the HTTP text route (agent.routes.ts maxLength). */
@@ -151,6 +152,10 @@ export async function audioRoutes(
           return;
         }
         log.error({ err }, "Agent pipeline failed");
+        captureServerError(err, {
+          where: "ws_agent_pipeline",
+          correlationId: request.correlationId,
+        });
         sendTurn({
           type: "error",
           code: "agent_turn_failed",
@@ -204,6 +209,7 @@ export async function audioRoutes(
       } catch (err) {
         if (!isTurnAborted(err, controller.signal)) {
           log.error({ err }, "Agent turn crashed");
+          captureServerError(err, { where: "ws_agent_turn", correlationId: request.correlationId });
         }
       } finally {
         clearTimeout(timer);
@@ -324,6 +330,7 @@ export async function audioRoutes(
       }
     })().catch((err: unknown) => {
       log.error({ err }, "Audio session setup failed");
+      captureServerError(err, { where: "ws_session_setup", correlationId: request.correlationId });
     });
 
     const handleClientMessage = (raw: Buffer | ArrayBuffer | Buffer[], isBinary: boolean): void => {
