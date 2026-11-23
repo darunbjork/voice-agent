@@ -5,6 +5,8 @@
 // matched "translate X in Y"; the tool then fell back to a default phrase and
 // translated "hello". Nothing here ever invents a phrase or a language.
 
+import { isCountryOrRegion } from "./location.js";
+
 export type TranslationLanguage = { name: string; code: string };
 
 export type TranslateRequest = {
@@ -75,6 +77,9 @@ export function resolveLanguage(raw: string): TranslationLanguage | null {
   if (!word) return null;
   const exact = TRANSLATION_LANGUAGES[word];
   if (exact) return { name: word, code: exact };
+  // A place is not a language: "France" is 2 edits from "french", "Germany"
+  // 1 from "german", and "UK" is the ISO code for Ukrainian.
+  if (isCountryOrRegion(raw)) return null;
   const byCode = CODE_TO_NAME[word];
   if (byCode) return { name: byCode, code: word };
   // Fuzzy only for longer words, so "in it" / "in me" never become a language.
