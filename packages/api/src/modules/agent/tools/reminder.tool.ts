@@ -1,7 +1,8 @@
 import type { ReminderCard } from "@voice-agent/shared-types";
 import { env } from "../../../env.js";
 import { getPrisma } from "../../../utils/db.js";
-import { extractReminderDetails, parseSchedule } from "../reminder-parser.js";
+import { parseSchedule } from "../reminder-parser.js";
+import { extractReminder } from "../reminder-extract.js";
 
 export { parseSchedule } from "../reminder-parser.js";
 
@@ -16,7 +17,8 @@ export type ReminderToolResult = {
 };
 
 export async function reminderTool(input: ReminderToolInput): Promise<ReminderToolResult> {
-  const extracted = extractReminderDetails(input.userText);
+  // Structured output {task, time} live; the pattern parser in mock mode.
+  const extracted = await extractReminder(input.userText);
   const note = extracted.note || input.slots.note?.trim() || "your task";
   const time = extracted.time || input.slots.time?.trim() || "later today";
 

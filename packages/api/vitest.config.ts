@@ -22,6 +22,8 @@ export default defineConfig({
       },
     },
     env: {
+      // Same clock as CI and Fly (UTC), so time-zone bugs show up locally too.
+      TZ: "UTC",
       NODE_ENV: "test",
       VOICE_MOCK: "true",
       // Never reach the real Groq API from tests, even if a local .env has a key
