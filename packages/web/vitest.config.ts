@@ -12,8 +12,13 @@ export default defineConfig({
       reporter: ["text", "lcov"],
       include: ["src/**/*.{ts,tsx}"],
       exclude: ["src/**/*.test.{ts,tsx}", "src/__tests__/**"],
+      // About 2 points under the measured coverage (Nov 2026: 75.1 / 79.6 /
+      // 70.8 / 75.1), so a real drop fails CI without flapping.
       thresholds: {
-        statements: 60,
+        statements: 73,
+        branches: 77,
+        functions: 68,
+        lines: 73,
       },
     },
   },

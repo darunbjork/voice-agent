@@ -6,13 +6,19 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts"],
     setupFiles: ["src/__tests__/setup.ts"],
+    globalSetup: ["src/__tests__/support/global-setup.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
       include: ["src/**/*.ts"],
-      exclude: ["src/generated/**", "src/**/*.test.ts"],
+      exclude: ["src/generated/**", "src/**/*.test.ts", "src/__tests__/**"],
+      // About 2 points under the measured coverage (Nov 2026: 90.3 / 84.9 /
+      // 93.9 / 90.3), so a real drop fails CI without flapping.
       thresholds: {
-        statements: 70,
+        statements: 88,
+        branches: 82,
+        functions: 91,
+        lines: 88,
       },
     },
     env: {
