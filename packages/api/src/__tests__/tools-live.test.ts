@@ -250,50 +250,65 @@ describe("reminder tool (live mode, real database)", () => {
 });
 
 describe("parseSchedule", () => {
-  const now = new Date("2026-10-04T10:00:00");
+  // Sunday 4 Oct 2026, 10:00 in Stockholm (UTC+2). Explicit offset and
+  // Stockholm wall-clock checks: the result must not depend on the machine's
+  // time zone (CI and Fly run in UTC).
+  const now = new Date("2026-10-04T10:00:00+02:00");
+
+  /** Wall-clock parts of `d` in Europe/Stockholm. */
+  function stockholm(d: Date | null) {
+    expect(d).not.toBeNull();
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/Stockholm",
+      day: "numeric",
+      weekday: "long",
+      hour: "numeric",
+      minute: "numeric",
+      hourCycle: "h23",
+    }).formatToParts(d!);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    return {
+      date: Number(get("day")),
+      weekday: get("weekday"),
+      hours: Number(get("hour")),
+      minutes: Number(get("minute")),
+    };
+  }
 
   it("schedules bare 'tomorrow' for 09:00 the next day", () => {
-    const d = parseSchedule("tomorrow", now);
-    expect(d).not.toBeNull();
-    expect(d?.getDate()).toBe(5);
-    expect(d?.getHours()).toBe(9);
+    expect(stockholm(parseSchedule("tomorrow", now))).toMatchObject({ date: 5, hours: 9 });
   });
 
   it("parses 'tomorrow at 5pm'", () => {
-    const d = parseSchedule("tomorrow at 5pm", now);
-    expect(d).not.toBeNull();
-    expect(d?.getDate()).toBe(5);
-    expect(d?.getHours()).toBe(17);
+    expect(stockholm(parseSchedule("tomorrow at 5pm", now))).toMatchObject({ date: 5, hours: 17 });
   });
 
   it("schedules a weekday for its next occurrence at 09:00", () => {
-    const d = parseSchedule("Monday", now);
-    expect(d).not.toBeNull();
-    expect(d?.getDay()).toBe(1);
-    expect(d?.getDate()).toBe(5);
-    expect(d?.getHours()).toBe(9);
+    expect(stockholm(parseSchedule("Monday", now))).toMatchObject({
+      weekday: "Monday",
+      date: 5,
+      hours: 9,
+    });
   });
 
   it("parses 'today at 09:30'", () => {
-    const d = parseSchedule("today at 09:30", now);
-    expect(d).not.toBeNull();
-    expect(d?.getDate()).toBe(4);
-    expect(d?.getHours()).toBe(9);
-    expect(d?.getMinutes()).toBe(30);
+    expect(stockholm(parseSchedule("today at 09:30", now))).toMatchObject({
+      date: 4,
+      hours: 9,
+      minutes: 30,
+    });
   });
 
   it("rolls a past bare time to tomorrow", () => {
-    const d = parseSchedule("at 5am", now);
-    expect(d).not.toBeNull();
-    expect(d?.getDate()).toBe(5);
-    expect(d?.getHours()).toBe(5);
+    expect(stockholm(parseSchedule("at 5am", now))).toMatchObject({ date: 5, hours: 5 });
   });
 
   it("keeps a future bare time today", () => {
-    const d = parseSchedule("at 5pm", now);
-    expect(d).not.toBeNull();
-    expect(d?.getDate()).toBe(4);
-    expect(d?.getHours()).toBe(17);
+    expect(stockholm(parseSchedule("at 5pm", now))).toMatchObject({ date: 4, hours: 17 });
+  });
+
+  it("is stored as the right instant (09:00 Stockholm = 07:00 UTC in October)", () => {
+    expect(parseSchedule("tomorrow", now)?.toISOString()).toBe("2026-10-05T07:00:00.000Z");
   });
 
   it("returns null when no schedule can be derived", () => {
