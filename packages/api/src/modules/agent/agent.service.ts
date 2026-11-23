@@ -110,21 +110,45 @@ const WANTS_MEANING =
  * completed translation, a rewritten "what does X mean?" if the user wanted
  * the meaning instead, or null when the new utterance is something else.
  */
+/** The whole answer says "stop": "nothing", "cancel", "never mind", "no thanks". */
+const CANCEL_PENDING =
+  /^(?:no|nope|nothing|none|cancel|stop|never\s*mind|forget\s+(?:it|about\s+it)|skip(?:\s+it)?)(?:[\s,.!]+(?:thanks?|thank\s+you|please))?[\s,.!]*$/i;
+
+/** "no, …" / "actually, …" / "I meant …" in front of a corrected answer. */
+const CORRECTION_LEAD =
+  /^(?:(?:(?:no|nope|sorry|actually|wait|oops|oh)[\s,.!]+)+(?:i\s+meant?\s+|make\s+it\s+|it\s+should\s+be\s+|rather\s+)?|i\s+meant?\s+)/i;
+
+export const TRANSLATE_CANCELLED_REPLY = "Okay, no translation. What else can I help with?";
+
 export function completePendingTranslation(
   pending: PendingTranslation,
   text: string,
   fast: ClassifyResult | null,
-): { kind: "translate"; slots: Record<string, string> } | { kind: "meaning"; text: string } | null {
+):
+  | { kind: "translate"; slots: Record<string, string> }
+  | { kind: "meaning"; text: string }
+  | { kind: "cancel" }
+  | null {
+  const answer = text.trim();
+  // Never translate "nothing" / "cancel": they end the pending request.
+  if (CANCEL_PENDING.test(answer)) return { kind: "cancel" };
+  const corrected = answer.replace(CORRECTION_LEAD, "").trim();
+  const isCorrection = corrected.length > 0 && corrected !== answer;
+  const reply = isCorrection ? corrected : answer;
+
   if (pending.original && !pending.toLang) {
-    if (WANTS_MEANING.test(text.trim())) {
+    if (WANTS_MEANING.test(reply)) {
       return { kind: "meaning", text: `What does "${pending.original}" mean?` };
     }
-    const language = parseLanguageAnswer(text);
+    const language = parseLanguageAnswer(reply);
     return language ? { kind: "translate", slots: { ...pending, toLang: language.name } } : null;
   }
   if (!pending.original && pending.toLang) {
     if (fast && fast.intent !== "translate") return null;
-    const original = cleanPhrase(normaliseTranscript(text));
+    // "No, I meant Spanish": a new language, and the phrase is asked again.
+    const language = isCorrection ? parseLanguageAnswer(reply) : null;
+    if (language) return { kind: "translate", slots: { ...pending, toLang: language.name } };
+    const original = cleanPhrase(normaliseTranscript(reply));
     return original ? { kind: "translate", slots: { ...pending, original } } : null;
   }
   return null;
@@ -229,33 +253,43 @@ export async function handleUtterance(
     return buildEmptyReply(input, pipelineStart);
   }
 
-  // "Who built you?" — a fact about the app, answered from code.
-  const identity = identityAnswer(trimmed);
-  if (identity) {
-    return buildDirectReply(input, pipelineStart, identity, "help");
-  }
-
-  // "How many days until New Year?" — counted in code, not by the model.
-  const dateReply = dateAnswer(trimmed);
-  if (dateReply) {
-    return buildDirectReply(input, pipelineStart, dateReply, "general");
-  }
-
   let text = trimmed;
   let fast = classifyByKeywords(text);
   let rewritten = false;
 
   // A translation we asked a question about last turn ("Which language?").
+  // Handled first: after "What should I translate into French?" the next
+  // utterance is the phrase, even "How many days until Christmas?".
   const pending = takePendingTranslation(input.sessionId);
   const fullTranslate = fast?.intent === "translate" && fast.slots.original && fast.slots.toLang;
+  let pendingHandled = false;
   if (pending && !fullTranslate) {
     const completed = completePendingTranslation(pending, text, fast);
+    pendingHandled = completed !== null;
+    if (completed?.kind === "cancel") {
+      return buildDirectReply(input, pipelineStart, TRANSLATE_CANCELLED_REPLY, "translate");
+    }
     if (completed?.kind === "translate") {
       fast = translateTurn(completed.slots);
     } else if (completed?.kind === "meaning") {
       text = completed.text;
       fast = null;
       rewritten = true;
+    }
+  }
+
+  // Not when the utterance is itself a translation ("Translate who built you into French").
+  if (!pendingHandled && !fullTranslate) {
+    // "Who built you?" — a fact about the app, answered from code.
+    const identity = identityAnswer(trimmed);
+    if (identity) {
+      return buildDirectReply(input, pipelineStart, identity, "help");
+    }
+
+    // "How many days until New Year?" — counted in code, not by the model.
+    const dateReply = dateAnswer(trimmed);
+    if (dateReply) {
+      return buildDirectReply(input, pipelineStart, dateReply, "general");
     }
   }
 
