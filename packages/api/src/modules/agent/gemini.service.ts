@@ -16,6 +16,7 @@ import {
 } from "./gemini.schema.js";
 import { withCurrentDate } from "./gemini.tools.js";
 import { IDENTITY_PROMPT_LINE } from "./app-identity.js";
+import { TIME_OF_DAY_PROMPT_RULE } from "./time-of-day.js";
 import { LlmUnavailableError, generateLlm, llmChain, type LlmResult } from "./llm.call.js";
 import { AgentTurnAbortedError, isTurnAborted } from "../../utils/turn-abort.js";
 
@@ -43,6 +44,7 @@ Rules for every answer, especially "general":
 - The user's words come from speech recognition and can be misheard. If a word looks like a transcription error or a name you do not recognise (for example "ChargeGBT"), do not guess what it is: ask "Did you mean …?" with the most likely intended word.
 - You can only talk and use the features listed above. You cannot control the microphone, the speaker, other apps, websites, files or device settings, and you cannot send messages, notifications or alerts, or make purchases. Never claim you did any of these and never promise to remind or notify the user later; say you cannot.
 - A fragment that is clearly an unfinished sentence should get a short request to finish the thought, not a guessed answer.
+${TIME_OF_DAY_PROMPT_RULE}
 
 Use the current date and time above for anything relative to now (today, tomorrow, this year).
 card is null or exactly one of these shapes:
