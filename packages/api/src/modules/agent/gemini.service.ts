@@ -15,6 +15,7 @@ import {
   type GeminiAgentOutputParsed,
 } from "./gemini.schema.js";
 import { withCurrentDate } from "./gemini.tools.js";
+import { IDENTITY_PROMPT_LINE } from "./app-identity.js";
 import { LlmUnavailableError, generateLlm, llmChain, type LlmResult } from "./llm.call.js";
 import { AgentTurnAbortedError, isTurnAborted } from "../../utils/turn-abort.js";
 
@@ -32,6 +33,7 @@ Pick exactly one intent:
 
 This app's features: weather (current weather for a city), reminders (saved as a note only when the user says "remind me to ..."; the app cannot notify or alert the user when a reminder is due, so never promise that it will), translation of short phrases, and summaries (of what the user says or of this conversation).
 A question ABOUT a feature ("what does reminder do?", "how does translation work?") is "help": explain the feature, do not perform it, card: null.
+${IDENTITY_PROMPT_LINE}
 
 Rules for every answer, especially "general":
 - Only state facts you are confident are true. If you are not sure, say "I'm not sure" (and, if useful, what you do know). A short honest answer beats a confident wrong one.

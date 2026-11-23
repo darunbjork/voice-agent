@@ -22,6 +22,7 @@ import {
 import { safeGenerateAgentOutput } from "./gemini.service.js";
 import { runTool, type ToolResult } from "./tool.registry.js";
 import { cleanLocation, extractWeatherLocation } from "./location.js";
+import { identityAnswer } from "./app-identity.js";
 import type { SessionContextTurn } from "../session/session.service.js";
 import { assertNotAborted } from "../../utils/turn-abort.js";
 
@@ -227,6 +228,12 @@ export async function handleUtterance(
     return buildEmptyReply(input, pipelineStart);
   }
 
+  // "Who built you?" — a fact about the app, answered from code.
+  const identity = identityAnswer(trimmed);
+  if (identity) {
+    return buildDirectReply(input, pipelineStart, identity, "help");
+  }
+
   let text = trimmed;
   let fast = classifyByKeywords(text);
   let rewritten = false;
@@ -356,6 +363,25 @@ export async function handleUtterance(
   );
 
   return { reply, viaFastPath, pipelineMs };
+}
+
+/** A reply decided in code (no tool, no LLM). */
+function buildDirectReply(
+  input: HandleUtteranceInput,
+  startedAt: number,
+  text: string,
+  intent: IntentType,
+): HandleUtteranceResult {
+  const llm = Math.max(1, Date.now() - startedAt);
+  const reply: AgentReply = {
+    text,
+    intent,
+    card: null,
+    latencyMs: { stt: input.sttLatencyMs, llm, tts: 0, total: input.sttLatencyMs + llm },
+    sessionId: input.sessionId,
+    turnIndex: input.turnIndex,
+  };
+  return { reply, viaFastPath: true, pipelineMs: llm };
 }
 
 function buildEmptyReply(input: HandleUtteranceInput, startedAt: number): HandleUtteranceResult {
