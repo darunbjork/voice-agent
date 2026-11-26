@@ -17,6 +17,7 @@ import {
 } from "../../utils/circuit-breaker.js";
 import type { ServerAudioMessage } from "@voice-agent/shared-types";
 import { Pcm16Aligner } from "../../utils/pcm-align.js";
+import { captureServerError } from "../../sentry.js";
 
 export type TtsChunkHandler = (msg: ServerAudioMessage) => void;
 
@@ -219,6 +220,8 @@ function streamLiveTts(
   type Attempt =
     { ok: true } | { ok: false; code: string; message: string; budgetExhausted: boolean };
 
+  const BUDGET_REACHED = "Daily ElevenLabs character budget reached.";
+
   let elevenChunks = 0;
 
   // Network reads can split a 16-bit sample; only forward whole samples.
@@ -238,44 +241,90 @@ function streamLiveTts(
           .map((s) => s.text)
           .join(" ");
 
-  /** One request per segment, in order, into the same audio stream. */
-  const attemptElevenLabs = async (): Promise<Attempt> => {
-    for (const segment of segments) {
-      if (cancelled) break;
-      const res = await fetch(elevenUrl, {
-        method: "POST",
-        headers: {
-          "xi-api-key": env.ELEVENLABS_API_KEY,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text: segment.text,
-          model_id: ELEVEN_MODEL,
-          voice_settings: { stability: 0.4, similarity_boost: 0.75 },
-          // Turbo v2.5 enforces the language: "god natt" is spoken as Swedish.
-          ...(segment.languageCode ? { language_code: segment.languageCode } : {}),
-        }),
-        signal: controller.signal,
-      });
+  /** Index of the segment being synthesised (for logs and Sentry). */
+  let segmentIndex = 0;
 
-      if (!res.ok || !res.body) {
-        const errText = await res.text().catch(() => res.statusText);
+  /**
+   * One request per segment, in order, into the same audio stream. Each
+   * segment reserves its own characters first (B1 cap), so a segment that no
+   * longer fits is not sent; a segment that produced no audio is refunded.
+   */
+  const attemptElevenLabs = async (): Promise<Attempt> => {
+    for (const [index, segment] of segments.entries()) {
+      if (cancelled) break;
+      segmentIndex = index;
+      const chars = segment.text.length;
+
+      let reserved: boolean;
+      try {
+        reserved = await reserveElevenLabsChars(chars);
+      } catch (err) {
+        // Cannot prove the segment fits the cap — do not spend ElevenLabs credits.
+        log.warn({ err, sessionId }, "TTS usage reservation failed — skipping ElevenLabs");
+        reserved = false;
+      }
+      if (cancelled) {
+        if (reserved) await releaseElevenLabsChars(chars, log);
+        break;
+      }
+      if (!reserved) {
+        log.info(
+          { sessionId, segment: index, dailyMaxTtsChars: getDailyLimits().ttsChars },
+          "ElevenLabs daily character budget reached — routing to Deepgram Aura",
+        );
         return {
           ok: false,
-          code: "tts_http_error",
-          message: `ElevenLabs ${res.status}: ${errText}`,
-          budgetExhausted: isElevenLabsQuotaError(res.status, errText),
+          code: "tts_budget_exhausted",
+          message: BUDGET_REACHED,
+          budgetExhausted: true,
         };
       }
 
-      const reader = res.body.getReader();
-      while (!cancelled) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value && value.byteLength > 0) {
-          elevenChunks += 1;
-          pushChunk(value);
+      const chunksBefore = elevenChunks;
+      // Nothing was synthesised for this segment, so nothing was billed.
+      const refundIfSilent = async (): Promise<void> => {
+        if (elevenChunks === chunksBefore) await releaseElevenLabsChars(chars, log);
+      };
+      try {
+        const res = await fetch(elevenUrl, {
+          method: "POST",
+          headers: {
+            "xi-api-key": env.ELEVENLABS_API_KEY,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            text: segment.text,
+            model_id: ELEVEN_MODEL,
+            voice_settings: { stability: 0.4, similarity_boost: 0.75 },
+            // Turbo v2.5 enforces the language: "god natt" is spoken as Swedish.
+            ...(segment.languageCode ? { language_code: segment.languageCode } : {}),
+          }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok || !res.body) {
+          const errText = await res.text().catch(() => res.statusText);
+          await refundIfSilent();
+          return {
+            ok: false,
+            code: "tts_http_error",
+            message: `ElevenLabs ${res.status}: ${errText}`,
+            budgetExhausted: isElevenLabsQuotaError(res.status, errText),
+          };
         }
+
+        const reader = res.body.getReader();
+        while (!cancelled) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value && value.byteLength > 0) {
+            elevenChunks += 1;
+            pushChunk(value);
+          }
+        }
+      } catch (err) {
+        await refundIfSilent();
+        throw err;
       }
       segmentsDone += 1;
     }
@@ -315,76 +364,59 @@ function streamLiveTts(
 
   void (async () => {
     if (elevenCircuitOk) {
-      let reserved: boolean;
+      let attempt: Attempt;
       try {
-        reserved = await reserveElevenLabsChars(text.length);
+        attempt = await attemptElevenLabs();
       } catch (err) {
-        // Cannot prove the reply fits the cap — do not spend ElevenLabs credits.
-        log.warn({ err, sessionId }, "TTS usage reservation failed — skipping ElevenLabs");
-        reserved = false;
+        attempt = {
+          ok: false,
+          code: "tts_stream_error",
+          message: err instanceof Error ? err.message : "ElevenLabs request failed",
+          budgetExhausted: false,
+        };
       }
-      if (cancelled) {
-        if (reserved) await releaseElevenLabsChars(text.length, log);
+
+      if (cancelled) return;
+      if (attempt.ok) {
+        recordSuccess("elevenlabs");
+        emitDone();
+        log.info(
+          { sessionId, chunks: sequence, oddChunks: aligner.oddChunks },
+          "Live TTS done (ElevenLabs)",
+        );
         return;
       }
 
-      if (!reserved) {
-        log.info(
-          { sessionId, dailyMaxTtsChars: getDailyLimits().ttsChars },
-          "ElevenLabs daily character budget reached — routing to Deepgram Aura",
-        );
-        if (!canFallback) {
-          budgetExhaustedError("Daily ElevenLabs character budget reached.");
-          return;
-        }
+      if (attempt.budgetExhausted) {
+        // Out of credits / rate-limited is not a provider fault: no breaker
+        // count and no Sentry event.
+        log.warn({ sessionId, reason: attempt.message }, "ElevenLabs budget exhausted");
       } else {
-        let attempt: Attempt;
-        try {
-          attempt = await attemptElevenLabs();
-        } catch (err) {
-          attempt = {
-            ok: false,
-            code: "tts_stream_error",
-            message: err instanceof Error ? err.message : "ElevenLabs request failed",
-            budgetExhausted: false,
-          };
-        }
-
-        if (attempt.ok) {
-          if (cancelled) return;
-          recordSuccess("elevenlabs");
-          emitDone();
-          log.info(
-            { sessionId, chunks: sequence, oddChunks: aligner.oddChunks },
-            "Live TTS done (ElevenLabs)",
-          );
-          return;
-        }
-
-        // Nothing was synthesised, so nothing was billed — give the chars back.
-        if (elevenChunks === 0) await releaseElevenLabsChars(text.length, log);
-        if (cancelled) return;
-
-        if (attempt.budgetExhausted) {
-          // Out of credits / rate-limited is not a provider fault: no breaker count.
-          log.warn({ sessionId, reason: attempt.message }, "ElevenLabs budget exhausted");
-        } else {
-          recordFailure("elevenlabs");
-        }
-
-        if (!canFallback) {
-          onChunk({
-            type: "error",
-            code: attempt.budgetExhausted ? "tts_budget_exhausted" : attempt.code,
-            message: attempt.message,
-          });
-          return;
-        }
-        log.warn(
-          { sessionId, reason: attempt.message },
-          "ElevenLabs failed — falling back to Deepgram Aura",
-        );
+        recordFailure("elevenlabs");
+        // One event per failed reply, naming the segment that failed.
+        const segment = segments[segmentIndex];
+        captureServerError(new Error(attempt.message), {
+          where: "tts_elevenlabs_segment",
+          code: attempt.code,
+          segment: `${segmentIndex + 1}/${segments.length}`,
+          language: segment?.languageCode ?? "none",
+        });
       }
+
+      if (!canFallback) {
+        onChunk({
+          type: "error",
+          code: attempt.budgetExhausted ? "tts_budget_exhausted" : attempt.code,
+          message: attempt.message,
+        });
+        // Earlier segments were already sent: let the player finish them.
+        if (elevenChunks > 0) emitDone();
+        return;
+      }
+      log.warn(
+        { sessionId, segment: segmentIndex, reason: attempt.message },
+        "ElevenLabs failed — falling back to Deepgram Aura",
+      );
     } else {
       log.info({ sessionId }, "Using Deepgram Aura TTS (ElevenLabs unavailable)");
     }
