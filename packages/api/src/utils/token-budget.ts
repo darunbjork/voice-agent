@@ -4,7 +4,8 @@ export type BudgetOperation = "agent_classify" | "agent_response" | "session_sum
 
 export const TOKEN_BUDGETS: Record<BudgetOperation, number> = {
   agent_classify: 200,
-  // System prompt (~400) + up to 3 context turns + the user's turn.
+  // Per call, not per day: system prompt (~860 tokens with the date line) +
+  // the utterance (<=500 chars) + history trimmed to whatever is left.
   agent_response: 1500,
   session_summary: 300,
   tts_reply: 600,

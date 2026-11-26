@@ -19,7 +19,7 @@ import {
   takePendingWeather,
   type PendingTranslation,
 } from "./pending-requests.js";
-import { safeGenerateAgentOutput } from "./gemini.service.js";
+import { fitsAgentPromptBudget, safeGenerateAgentOutput } from "./gemini.service.js";
 import { runTool, type ToolResult } from "./tool.registry.js";
 import { cleanLocation, extractWeatherLocation } from "./location.js";
 import { identityAnswer } from "./app-identity.js";
@@ -45,22 +45,31 @@ export type HandleUtteranceResult = {
   pipelineMs: number;
 };
 
-const MAX_INPUT_CHARS = 500;
+export const MAX_INPUT_CHARS = 500;
 /** Recent conversation sent with a general question (~750 tokens). */
 export const MAX_CONTEXT_CHARS = 3000;
 
 /**
  * The current utterance with the recent conversation, newest turns kept, so
  * acronyms resolve from what was said ("MCP" = Model Context Protocol, not a
- * guessed expansion).
+ * guessed expansion). Oldest lines are dropped until the prompt fits both
+ * MAX_CONTEXT_CHARS and the per-call token budget (system prompt included):
+ * a long session must never be refused because of its history (live: after
+ * ~20 turns every reply was "I am over my daily limit").
  */
 export function buildPromptWithContext(text: string, context: SessionContextTurn[]): string {
   const lines = context
     .filter((t) => t.text.trim().length > 0)
     .map((t) => `${t.role === "user" ? "User" : "Assistant"}: ${t.text.trim()}`);
-  while (lines.length > 0 && lines.join("\n").length > MAX_CONTEXT_CHARS) lines.shift();
-  if (lines.length === 0) return text;
-  return `Conversation so far:\n${lines.join("\n")}\n\nCurrent message from the user:\n${text}`;
+  const withHistory = (): string =>
+    `Conversation so far:\n${lines.join("\n")}\n\nCurrent message from the user:\n${text}`;
+  while (
+    lines.length > 0 &&
+    (lines.join("\n").length > MAX_CONTEXT_CHARS || !fitsAgentPromptBudget(withHistory()))
+  ) {
+    lines.shift();
+  }
+  return lines.length === 0 ? text : withHistory();
 }
 /** Most recent part of the conversation that is sent for a summary (~1k tokens). */
 export const MAX_CONVERSATION_SUMMARY_CHARS = 4000;
