@@ -3,6 +3,7 @@ import type { WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
 import { createDeepgramProxy, handleControlMessage, type DeepgramProxy } from "./deepgram.proxy.js";
 import { streamTts, type TtsStream } from "./elevenlabs.service.js";
+import { ttsSegmentsFor } from "./tts-segments.js";
 import { handleUtterance } from "../agent/agent.service.js";
 import {
   createSession,
@@ -181,7 +182,9 @@ export async function audioRoutes(
 
       currentTts?.cancel();
       try {
-        currentTts = streamTts(reply.text, sendSafe, log, dbSessionId);
+        currentTts = streamTts(reply.text, sendSafe, log, dbSessionId, {
+          segments: ttsSegmentsFor(reply),
+        });
       } catch (err) {
         log.warn({ err }, "TTS not started");
         currentTts = null;
