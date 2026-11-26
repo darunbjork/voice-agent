@@ -3,6 +3,7 @@ import type { GeminiAgentOutput, IntentType } from "@voice-agent/shared-types";
 import { env } from "../../env.js";
 import {
   assertWithinBudget,
+  TOKEN_BUDGETS,
   estimateTokens,
   BudgetExceededError,
 } from "../../utils/token-budget.js";
@@ -68,14 +69,36 @@ export class GeminiParseError extends Error {
   }
 }
 
+/** Slack the per-call estimate adds for the JSON reply framing. */
+const AGENT_PROMPT_OVERHEAD_TOKENS = 120;
+
+/** Estimated tokens of one agent call, as the per-call check counts them. */
+export function agentPromptTokens(system: string, user: string): number {
+  return estimateTokens(system) + estimateTokens(user) + AGENT_PROMPT_OVERHEAD_TOKENS;
+}
+
+/**
+ * True when `user` (utterance plus any history) fits the per-call
+ * agent_response budget with today's system prompt. buildPromptWithContext
+ * trims history with it, so history alone can never cause a refusal.
+ */
+export function fitsAgentPromptBudget(user: string, now: Date = new Date()): boolean {
+  return (
+    agentPromptTokens(withCurrentDate(SYSTEM_PROMPT, now), user) <= TOKEN_BUDGETS.agent_response
+  );
+}
+
 export async function generateAgentOutput(
   userText: string,
   log: FastifyBaseLogger,
   preferredIntent?: IntentType,
   signal?: AbortSignal,
 ): Promise<AgentOutput> {
-  const estimated = estimateTokens(userText) + estimateTokens(SYSTEM_PROMPT) + 120;
-  assertWithinBudget("agent_response", estimated);
+  const system = withCurrentDate(SYSTEM_PROMPT);
+  // Per-call ceiling (not the daily cap — that is B2's reservation in
+  // generateLlm). History is already trimmed to fit, so this only fires when
+  // the system prompt plus the utterance itself are too big.
+  assertWithinBudget("agent_response", agentPromptTokens(system, userText));
 
   if (env.VOICE_MOCK) {
     const intent: IntentType = preferredIntent ?? "fallback";
@@ -102,7 +125,7 @@ export async function generateAgentOutput(
   try {
     result = await generateLlm(
       {
-        system: withCurrentDate(SYSTEM_PROMPT),
+        system,
         user: userText,
         // Low: factual answers, not creative ones (fewer invented details).
         temperature: AGENT_TEMPERATURE,
@@ -204,9 +227,19 @@ export async function safeGenerateAgentOutput(
       };
     }
     if (err instanceof BudgetExceededError) {
-      log.warn({ err }, "Gemini budget exceeded");
+      // Name the real cause: only the daily cap is a "daily limit".
+      if (err.operation === "daily") {
+        log.warn({ err }, "Daily token cap reached");
+        return {
+          reply: "I am over my daily limit. Please try again later.",
+          intent: "fallback",
+          card: null,
+        };
+      }
+      log.warn({ err }, "Prompt over the per-call token budget");
       return {
-        reply: "I am over my daily limit. Please try again later.",
+        reply:
+          "That message is too long for me to answer in one go. Please ask a shorter question.",
         intent: "fallback",
         card: null,
       };
