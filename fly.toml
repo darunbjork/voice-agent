@@ -6,7 +6,8 @@ primary_region = "arn"
   dockerfile = "packages/api/Dockerfile"
 
 [deploy]
-  release_command = "pnpm --filter @voice-agent/api exec prisma migrate deploy"
+  # Waits for the (possibly sleeping) Postgres, then runs prisma migrate deploy once.
+  release_command = "sh /app/scripts/release.sh"
 
 [env]
   NODE_ENV = "production"
