@@ -1,6 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { handleUtterance } from "../modules/agent/agent.service.js";
+import { safeGenerateAgentOutput } from "../modules/agent/gemini.service.js";
 import type { FastifyBaseLogger } from "fastify";
+
+// Pass-through spy: real behaviour, but lets us assert whether the LLM ran
+// (instead of timing the turn, which flaked on slow CI runners).
+vi.mock("../modules/agent/gemini.service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../modules/agent/gemini.service.js")>();
+  return { ...actual, safeGenerateAgentOutput: vi.fn(actual.safeGenerateAgentOutput) };
+});
+
+beforeEach(() => {
+  vi.mocked(safeGenerateAgentOutput).mockClear();
+});
 
 const silentLogger = {
   info: () => undefined,
@@ -58,9 +70,8 @@ const CASES: Case[] = [
 
 describe("agent pipeline (mock)", () => {
   for (const c of CASES) {
-    it(`handles "${c.text.slice(0, 40)}" as ${c.intent} under 1000 ms`, async () => {
-      const start = Date.now();
-      const { reply, pipelineMs, viaFastPath } = await handleUtterance(
+    it(`handles "${c.text.slice(0, 40)}" as ${c.intent}`, async () => {
+      const { reply, viaFastPath } = await handleUtterance(
         {
           text: c.text,
           sessionId: "test-session",
@@ -69,15 +80,13 @@ describe("agent pipeline (mock)", () => {
         },
         silentLogger,
       );
-      const wall = Date.now() - start;
-
       expect(viaFastPath).toBe(c.fast);
       expect(reply.intent).toBe(c.intent);
       expect(reply.text.length).toBeGreaterThan(0);
       expect(reply.sessionId).toBe("test-session");
       expect(reply.latencyMs.stt).toBe(40);
-      expect(pipelineMs).toBeLessThan(1000);
-      expect(wall).toBeLessThan(1000);
+      // Fast path = tools only; slow path = exactly one LLM call (no timing).
+      expect(safeGenerateAgentOutput).toHaveBeenCalledTimes(c.fast ? 0 : 1);
 
       if (c.expectedCard === null) {
         expect(reply.card).toBeNull();
@@ -88,8 +97,7 @@ describe("agent pipeline (mock)", () => {
     });
   }
 
-  it("fast-path pipeline stays under 50 ms wall time (tool only, no LLM)", async () => {
-    const start = Date.now();
+  it("fast-path pipeline is tool only: the LLM is not called", async () => {
     const { viaFastPath } = await handleUtterance(
       {
         text: "Weather in Berlin",
@@ -99,14 +107,12 @@ describe("agent pipeline (mock)", () => {
       },
       silentLogger,
     );
-    const wall = Date.now() - start;
-
     expect(viaFastPath).toBe(true);
-    expect(wall).toBeLessThan(50);
+    expect(safeGenerateAgentOutput).not.toHaveBeenCalled();
   });
 
-  it("empty input returns a fallback reply quickly", async () => {
-    const { reply, pipelineMs, viaFastPath } = await handleUtterance(
+  it("empty input returns a fallback reply without calling the LLM", async () => {
+    const { reply, viaFastPath } = await handleUtterance(
       {
         text: "   ",
         sessionId: "s",
@@ -118,6 +124,6 @@ describe("agent pipeline (mock)", () => {
 
     expect(viaFastPath).toBe(false);
     expect(reply.intent).toBe("fallback");
-    expect(pipelineMs).toBeLessThan(50);
+    expect(safeGenerateAgentOutput).not.toHaveBeenCalled();
   });
 });

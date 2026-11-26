@@ -8,6 +8,20 @@ import { turnLimits, mergeTranscripts } from "../modules/audio/audio.routes.js";
 const { handleUtteranceMock } = vi.hoisted(() => ({ handleUtteranceMock: vi.fn() }));
 vi.mock("../modules/agent/agent.service.js", () => ({ handleUtterance: handleUtteranceMock }));
 
+// Pass-through spy on control messages: lets a test wait until the server has
+// actually handled barge_in (it sends nothing back for it).
+const { controlSpy } = vi.hoisted(() => ({ controlSpy: vi.fn() }));
+vi.mock("../modules/audio/deepgram.proxy.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../modules/audio/deepgram.proxy.js")>();
+  return {
+    ...actual,
+    handleControlMessage: (...args: Parameters<typeof actual.handleControlMessage>) => {
+      controlSpy(args[0]);
+      return actual.handleControlMessage(...args);
+    },
+  };
+});
+
 type Msg = { type: string; code?: string; reply?: { text: string } };
 
 const reply = (text: string) => ({
@@ -31,6 +45,33 @@ const hangUntilAborted = (input: { signal?: AbortSignal }) =>
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Polls until `cond` holds. Fails with `what` if it never does (no fixed sleeps). */
+async function until(cond: () => boolean, what: string, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for: ${what}`);
+    await sleep(5);
+  }
+}
+
+/**
+ * Agent mock for split-utterance tests: fragments hang until the server
+ * cancels them (deterministic, unlike a fixed agent delay); the full text
+ * answers at once. `ignoreAbort` makes a cancelled fragment still return a reply.
+ */
+const fragmentsHang =
+  (full: string, seen: string[] = [], ignoreAbort = false) =>
+  async (input: { text: string; signal?: AbortSignal }) => {
+    seen.push(input.text);
+    if (input.text === full) return reply(input.text);
+    await new Promise<void>((resolve) => {
+      if (input.signal?.aborted) resolve();
+      input.signal?.addEventListener("abort", () => resolve());
+    });
+    if (ignoreAbort) return reply(`answer to: ${input.text}`);
+    throw new Error("aborted");
+  };
+
 describe("audio WebSocket turns always end in a reply or a visible error", () => {
   let app: FastifyInstance;
   let port: number;
@@ -48,15 +89,42 @@ describe("audio WebSocket turns always end in a reply or a visible error", () =>
 
   beforeEach(() => {
     handleUtteranceMock.mockReset();
+    controlSpy.mockClear();
   });
   afterEach(() => {
     Object.assign(turnLimits, savedLimits);
   });
 
-  /** Opens a session, sends the given client messages, collects JSON messages for `ms`. */
+  const replies = (msgs: Msg[]) =>
+    msgs.filter((m) => m.type === "agent_response").map((m) => m.reply?.text);
+  const errors = (msgs: Msg[]) => msgs.filter((m) => m.type === "error").map((m) => m.code);
+  const agentCalls = () => handleUtteranceMock.mock.calls.length;
+
+  /**
+   * Barrier instead of a "grace" sleep: once every agent call has settled, any
+   * reply it causes is written before the server reads our next frame. So we
+   * send a frame the server rejects at once (invalid_message) and wait for that
+   * rejection: a duplicate reply, if any, has arrived before it. The barrier's
+   * own error is removed from `msgs`.
+   */
+  async function barrier(ws: WebSocket, msgs: Msg[]): Promise<void> {
+    await Promise.allSettled(handleUtteranceMock.mock.results.map((r) => r.value as unknown));
+    const from = msgs.length;
+    const isBarrier = (m: Msg, i: number) =>
+      i >= from && m.type === "error" && m.code === "invalid_message";
+    ws.send("barrier: not JSON");
+    await until(() => msgs.some(isBarrier), "barrier rejection");
+    msgs.splice(msgs.findIndex(isBarrier), 1);
+  }
+
+  /**
+   * Opens a session, runs `script`, waits until `done(msgs)` holds, then a
+   * barrier so a duplicate reply would still be seen. Every step waits for an
+   * event, never for a guessed time.
+   */
   async function session(
-    send: (ws: WebSocket) => Promise<void> | void,
-    ms: number,
+    script: (ws: WebSocket, msgs: Msg[]) => Promise<void> | void,
+    done: (msgs: Msg[]) => boolean,
   ): Promise<Msg[]> {
     const msgs: Msg[] = [];
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws/audio`, {
@@ -69,23 +137,26 @@ describe("audio WebSocket turns always end in a reply or a visible error", () =>
       ws.on("open", () => resolve());
       ws.on("error", reject);
     });
-    await send(ws);
-    await sleep(ms);
-    ws.close();
+    try {
+      await script(ws, msgs);
+      await until(() => done(msgs), "the expected reply/error");
+      await barrier(ws, msgs);
+    } finally {
+      ws.close();
+    }
     return msgs;
   }
 
   const ask = (ws: WebSocket, text: string) =>
     ws.send(JSON.stringify({ type: "text_input", text }));
-  const replies = (msgs: Msg[]) =>
-    msgs.filter((m) => m.type === "agent_response").map((m) => m.reply?.text);
-  const errors = (msgs: Msg[]) => msgs.filter((m) => m.type === "error").map((m) => m.code);
+  const answered = (msgs: Msg[]) =>
+    msgs.some((m) => m.type === "agent_response" || m.type === "error");
 
   it("a turn that hangs ends with a visible turn_timeout error", async () => {
     turnLimits.timeoutMs = 150;
     handleUtteranceMock.mockImplementation(hangUntilAborted);
 
-    const msgs = await session((ws) => ask(ws, "What is agentic AI?"), 400);
+    const msgs = await session((ws) => ask(ws, "What is agentic AI?"), answered);
 
     expect(replies(msgs)).toEqual([]);
     expect(errors(msgs)).toEqual(["turn_timeout"]);
@@ -93,64 +164,58 @@ describe("audio WebSocket turns always end in a reply or a visible error", () =>
 
   it("an agent crash ends with a visible error", async () => {
     handleUtteranceMock.mockRejectedValue(new Error("boom"));
-    const msgs = await session((ws) => ask(ws, "How are you?"), 200);
+    const msgs = await session((ws) => ask(ws, "How are you?"), answered);
     expect(errors(msgs)).toEqual(["agent_turn_failed"]);
   });
 
   it("barge-in while thinking stops speech but keeps the pending reply", async () => {
+    let release = (): void => undefined;
     handleUtteranceMock.mockImplementation(async () => {
-      await sleep(150);
+      await new Promise<void>((r) => (release = r));
       return reply("kept");
     });
     const msgs = await session(async (ws) => {
       ask(ws, "What is the main difference between agentic AI and RAG?");
-      await sleep(30);
+      await until(() => agentCalls() === 1, "agent called");
       ws.send(JSON.stringify({ type: "barge_in" }));
-    }, 400);
+      await until(
+        () => controlSpy.mock.calls.some(([m]) => (m as Msg).type === "barge_in"),
+        "server handled barge_in",
+      );
+      release();
+    }, answered);
     expect(replies(msgs)).toEqual(["kept"]);
   });
 
   // ── Split utterances (live: "Can I build" / "an animation video?" got two replies) ──
 
   it("a continuation before the reply cancels it and answers the merged text once", async () => {
+    const full = "Can I build an animation video?";
     const seen: string[] = [];
-    handleUtteranceMock.mockImplementation(
-      async (input: { text: string; signal?: AbortSignal }) => {
-        seen.push(input.text);
-        await sleep(200);
-        if (input.signal?.aborted) throw new Error("aborted");
-        return reply(`answer to: ${input.text}`);
-      },
-    );
+    handleUtteranceMock.mockImplementation(fragmentsHang(full, seen));
 
     const msgs = await session(async (ws) => {
       ask(ws, "Can I build");
-      await sleep(60);
+      await until(() => agentCalls() === 1, "fragment reached the agent");
       ask(ws, "an animation video?");
-    }, 700);
+    }, answered);
 
-    // The fragment may be cancelled before or after it reached the agent.
-    expect(seen.at(-1)).toBe("Can I build an animation video?");
-    expect(seen.every((t) => t === "Can I build" || t === "Can I build an animation video?")).toBe(
-      true,
-    );
-    expect(replies(msgs)).toEqual(["answer to: Can I build an animation video?"]);
+    expect(seen).toEqual(["Can I build", full]);
+    expect(replies(msgs)).toEqual([full]);
     expect(errors(msgs)).toEqual([]);
   });
 
   it("the cancelled reply is suppressed even if the agent ignores the abort", async () => {
-    handleUtteranceMock.mockImplementation(async (input: { text: string }) => {
-      await sleep(input.text === "Which language is more" ? 200 : 20);
-      return reply(`answer to: ${input.text}`);
-    });
+    const full = "Which language is more into tech?";
+    handleUtteranceMock.mockImplementation(fragmentsHang(full, [], true));
 
     const msgs = await session(async (ws) => {
       ask(ws, "Which language is more");
-      await sleep(50);
+      await until(() => agentCalls() === 1, "fragment reached the agent");
       ask(ws, "into tech?");
-    }, 600);
+    }, answered);
 
-    expect(replies(msgs)).toEqual(["answer to: Which language is more into tech?"]);
+    expect(replies(msgs)).toEqual([full]);
   });
 
   it.each([
@@ -158,55 +223,45 @@ describe("audio WebSocket turns always end in a reply or a visible error", () =>
     ["Which language is more", "into tech?"],
     ["What kind of app would attract", "users, developers,"],
   ])("live split %s / %s → one merged reply", async (first, second) => {
-    handleUtteranceMock.mockImplementation(
-      async (input: { text: string; signal?: AbortSignal }) => {
-        await sleep(150);
-        if (input.signal?.aborted) throw new Error("aborted");
-        return reply(input.text);
-      },
-    );
+    handleUtteranceMock.mockImplementation(fragmentsHang(`${first} ${second}`));
     const msgs = await session(async (ws) => {
       ask(ws, first);
-      await sleep(40);
+      await until(() => agentCalls() === 1, "fragment reached the agent");
       ask(ws, second);
-    }, 600);
+    }, answered);
     expect(replies(msgs)).toEqual([`${first} ${second}`]);
   });
 
   it("three fragments become one turn", async () => {
+    const full = "What kind of app would attract users, developers,";
     const seen: string[] = [];
-    handleUtteranceMock.mockImplementation(
-      async (input: { text: string; signal?: AbortSignal }) => {
-        seen.push(input.text);
-        await sleep(150);
-        if (input.signal?.aborted) throw new Error("aborted");
-        return reply(input.text);
-      },
-    );
+    handleUtteranceMock.mockImplementation(fragmentsHang(full, seen));
 
     const msgs = await session(async (ws) => {
       ask(ws, "What kind of app would");
-      await sleep(40);
+      await until(() => agentCalls() === 1, "first fragment reached the agent");
       ask(ws, "attract");
-      await sleep(40);
+      await until(() => agentCalls() === 2, "merged fragment reached the agent");
       ask(ws, "users, developers,");
-    }, 700);
+    }, answered);
 
-    expect(replies(msgs)).toEqual(["What kind of app would attract users, developers,"]);
-    expect(seen.at(-1)).toBe("What kind of app would attract users, developers,");
+    expect(replies(msgs)).toEqual([full]);
+    expect(seen).toEqual(["What kind of app would", "What kind of app would attract", full]);
   });
 
   it("after a reply was delivered, the next utterance is a new question", async () => {
-    handleUtteranceMock.mockImplementation(async (input: { text: string }) => {
-      await sleep(20);
-      return reply(`answer to: ${input.text}`);
-    });
+    handleUtteranceMock.mockImplementation(async (input: { text: string }) =>
+      reply(`answer to: ${input.text}`),
+    );
 
-    const msgs = await session(async (ws) => {
-      ask(ws, "What is RAG?");
-      await sleep(150);
-      ask(ws, "And what is MCP?");
-    }, 400);
+    const msgs = await session(
+      async (ws, live) => {
+        ask(ws, "What is RAG?");
+        await until(() => replies(live).length === 1, "first reply");
+        ask(ws, "And what is MCP?");
+      },
+      (m) => replies(m).length === 2,
+    );
 
     expect(replies(msgs)).toEqual(["answer to: What is RAG?", "answer to: And what is MCP?"]);
   });
@@ -217,11 +272,16 @@ describe("audio WebSocket turns always end in a reply or a visible error", () =>
       .mockImplementationOnce(hangUntilAborted)
       .mockImplementationOnce(async () => reply("second answer"));
 
-    const msgs = await session(async (ws) => {
-      ask(ws, "first");
-      await sleep(250);
-      ask(ws, "second");
-    }, 450);
+    const msgs = await session(
+      async (ws, live) => {
+        ask(ws, "first");
+        // Wait for the timeout itself; a fixed sleep let "second" arrive first
+        // on slow CI, so it was merged into the hanging turn (no error sent).
+        await until(() => errors(live).length === 1, "turn_timeout error");
+        ask(ws, "second");
+      },
+      (m) => replies(m).length === 1,
+    );
 
     expect(errors(msgs)).toEqual(["turn_timeout"]);
     expect(replies(msgs)).toEqual(["second answer"]);
