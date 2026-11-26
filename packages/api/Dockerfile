@@ -21,8 +21,15 @@ RUN pnpm --filter @voice-agent/shared-types build \
 
 # ── runner ────────────────────────────────────────────────────────
 FROM node:22-alpine AS runner
+# pnpm is prepared at build time into a shared corepack cache. It used to sit
+# in root's cache while the app runs as `voice`, so corepack downloaded pnpm
+# on every release_command. Network is off for corepack at runtime: a missing
+# pnpm now fails instead of downloading.
+ENV COREPACK_HOME=/opt/corepack
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate \
+  && chmod -R a+rX /opt/corepack \
   && addgroup -S voice && adduser -S voice -G voice
+ENV COREPACK_ENABLE_NETWORK=0
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3001
@@ -37,8 +44,11 @@ COPY --from=build /app/packages/api/src/generated ./packages/api/dist/generated
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages/api/node_modules ./packages/api/node_modules
 COPY --from=build /app/packages/shared-types/node_modules ./packages/shared-types/node_modules
+COPY scripts/release.sh ./scripts/release.sh
 
 USER voice
+# Fails the build if pnpm would need the network as the runtime user.
+RUN pnpm --version
 EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD wget -qO- http://127.0.0.1:3001/health || exit 1
