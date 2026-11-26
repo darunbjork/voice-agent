@@ -5,7 +5,13 @@ import type {
   IntentType,
   LatencyBreakdown,
 } from "@voice-agent/shared-types";
-import { classifyByKeywords, type ClassifyResult } from "./intent.classifier.js";
+import {
+  classifyByKeywords,
+  isExplicitHelpRequest,
+  isFeatureQuestion,
+  type ClassifyResult,
+} from "./intent.classifier.js";
+import { resolveLanguage } from "./translate-request.js";
 import {
   cleanPhrase,
   normaliseTranscript,
@@ -219,6 +225,33 @@ function applyToolResult(
  * from the user (city, phrase and language, task and time) and run the real
  * tool. Its own card and reply are dropped — live, it invented weather.
  */
+/** True when both names/codes resolve to the same language ("en", "English"). */
+function sameLanguage(a: string, b: string): boolean {
+  const x = resolveLanguage(a)?.code ?? a.trim().toLowerCase();
+  const y = resolveLanguage(b)?.code ?? b.trim().toLowerCase();
+  return x.length > 0 && x === y;
+}
+
+/**
+ * The model's label is not trusted for menus and tools (C7). Live, a history
+ * question about U.S. "aid" came back as intent "help" with the help card;
+ * "synonyms in English" came back as a translation English → English. Its
+ * spoken answer is kept, as a general reply.
+ */
+function checkModelRouting<T extends GeminiAgentOutput>(generated: T, text: string): T {
+  if (generated.intent === "help" && !isExplicitHelpRequest(text) && !isFeatureQuestion(text)) {
+    return { ...generated, intent: "general", card: null };
+  }
+  if (
+    generated.intent === "translate" &&
+    generated.card?.type === "translate" &&
+    sameLanguage(generated.card.fromLang, generated.card.toLang)
+  ) {
+    return { ...generated, intent: "general", card: null };
+  }
+  return generated;
+}
+
 async function runToolChosenByModel(
   generated: GeminiAgentOutput,
   text: string,
@@ -331,6 +364,23 @@ export async function handleUtterance(
   const conversationSummary = fast?.intent === "summarize" && fast.slots.scope === "conversation";
   const conversation = conversationSummary ? await loadConversation(input, log) : "";
 
+  // A tool may hand the turn back (a "translation" into the same language):
+  // then the LLM answers it as a normal question.
+  let toolResult: ToolResult | null = null;
+  if (fast && !(conversationSummary && !conversation)) {
+    toolResult = await runTool(fast.intent, {
+      // A conversation summary works on the session transcript, not on the
+      // request itself ("summarize everything we discussed").
+      userText: conversationSummary ? conversation : toolText,
+      slots: fast.slots,
+    });
+    if (toolResult.handOff) {
+      log.info({ intent: fast.intent }, "Tool handed the turn to the LLM");
+      fast = null;
+      toolResult = null;
+    }
+  }
+
   if (fast && conversationSummary && !conversation) {
     viaFastPath = true;
     intent = "summarize";
@@ -340,16 +390,9 @@ export async function handleUtterance(
       intent,
       card: null,
     };
-  } else if (fast) {
+  } else if (fast && toolResult) {
     viaFastPath = true;
     intent = fast.intent;
-
-    const toolResult = await runTool(fast.intent, {
-      // A conversation summary works on the session transcript, not on the
-      // request itself ("summarize everything we discussed").
-      userText: conversationSummary ? conversation : toolText,
-      slots: fast.slots,
-    });
 
     output = applyToolResult(intent, toolResult, input.sessionId, toolText);
 
@@ -362,7 +405,10 @@ export async function handleUtterance(
 
     const promptText = buildPromptWithContext(text, input.context ?? []);
 
-    const generated = await safeGenerateAgentOutput(promptText, log, undefined, input.signal);
+    const generated = checkModelRouting(
+      await safeGenerateAgentOutput(promptText, log, undefined, input.signal),
+      text,
+    );
     source = generated.source ?? "none";
     const fromTool = await runToolChosenByModel(generated, text, input.sessionId);
     if (fromTool) source = `${source} → ${generated.intent} tool`;

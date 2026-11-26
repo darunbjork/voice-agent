@@ -5,7 +5,11 @@
 import type { IntentType } from "@voice-agent/shared-types";
 import { extractReminderDetails } from "./reminder-parser.js";
 import { extractWeatherLocation } from "./location.js";
-import { TRANSLATION_LANGUAGES, parseTranslateRequest } from "./translate-request.js";
+import {
+  TRANSLATION_LANGUAGES,
+  parseTranslateRequest,
+  type TranslateRequest,
+} from "./translate-request.js";
 
 export type ClassifyResult = {
   intent: IntentType;
@@ -81,14 +85,42 @@ const KEYWORD_RULES: KeywordRule[] = [
     extract: (text: string): Record<string, string> =>
       CONVERSATION_SCOPE.some((p) => p.test(text)) ? { scope: "conversation" } : {},
   },
-  {
-    intent: "help",
-    patterns: [
-      /\b(help|what\s+can\s+you\s+do|commands|capabilities|how\s+do\s+i)\b/i,
-      /\bwhat\s+are\s+your\s+features\b/i,
-    ],
-  },
+  // No "help" keyword rule: help is matched by HELP_REQUEST below, before
+  // these rules. The word "help" elsewhere is not enough (C7): "Thanks for
+  // the help", "help me write a cover letter", "How do I cook rice?".
 ];
+
+/**
+ * Explicit requests for the help menu: "help" on its own, "what can you do?",
+ * "list commands", "what are your features?". Whole-word, and the main ask of
+ * the utterance (anchored), so "help" inside another request does not count.
+ */
+const HELP_REQUEST: RegExp[] = [
+  /^\s*(?:please\s+)?help(?:\s+me)?(?:,?\s+please)?\s*[.!?]*\s*$/i,
+  /^\s*(?:i\s+need\s+help|(?:can|could)\s+you\s+help(?:\s+me)?)\s*[.!?]*\s*$/i,
+  /\bwhat\s+(?:else\s+)?can\s+you\s+(?:do|help\s+(?:me\s+)?with)\b/i,
+  /\bwhat\s+are\s+your\s+(?:features|capabilities|commands)\b/i,
+  /\bwhat\s+commands\b/i,
+  /^\s*(?:please\s+)?(?:list|show)(?:\s+me)?\s+(?:the\s+|your\s+|all\s+(?:the\s+)?|available\s+)*(?:commands|features|capabilities)\b/i,
+  /^\s*(?:commands|capabilities|features)\s*[.!?]*\s*$/i,
+  /\bhow\s+do\s+i\s+use\s+(?:this(?:\s+app)?|you|the\s+app)\s*[.!?]*\s*$/i,
+];
+
+export function isExplicitHelpRequest(text: string): boolean {
+  return HELP_REQUEST.some((p) => p.test(text));
+}
+
+/**
+ * Questions about words in one language ("synonyms in English for native",
+ * "another word for happy", "rephrase this") are not translations: they go to
+ * the LLM. Live: they were translated English → English.
+ */
+const WORD_QUESTION =
+  /\b(?:synonyms?|antonyms?|rephrase|paraphrase|reword|(?:another|other)\s+words?\s+for|similar\s+words?|words?\s+(?:that\s+mean|close\s+in\s+meaning))\b/i;
+
+export function isWordQuestion(text: string): boolean {
+  return WORD_QUESTION.test(text);
+}
 
 /** "Summarize everything we discussed" → summarise the session, not this utterance. */
 const CONVERSATION_SCOPE: RegExp[] = [
@@ -140,9 +172,15 @@ export function classifyByKeywords(text: string): ClassifyResult | null {
   const normalised = text.trim();
   if (!normalised) return null;
 
+  if (isExplicitHelpRequest(normalised)) {
+    return { intent: "help", viaFastPath: true, confidence: 1, slots: {} };
+  }
+
+  const wordQuestion = isWordQuestion(normalised);
+
   // A complete translation request (phrase + known language) wins first:
   // "What does weather mean in Swedish?" is a translation, not weather.
-  const translation = parseTranslateRequest(normalised);
+  const translation: TranslateRequest = wordQuestion ? {} : parseTranslateRequest(normalised);
   if (translation.original && translation.language) {
     return {
       intent: "translate",
@@ -155,6 +193,7 @@ export function classifyByKeywords(text: string): ClassifyResult | null {
   if (isFeatureQuestion(normalised)) return null;
 
   for (const rule of KEYWORD_RULES) {
+    if (wordQuestion && rule.intent === "translate") continue;
     for (const pattern of rule.patterns) {
       if (pattern.test(normalised)) {
         const slots = rule.extract?.(normalised) ?? {};

@@ -15,6 +15,11 @@ export type ToolResult = {
   replyHint: string | null;
   /** Translate only: what is known so far when the tool had to ask. */
   pending?: Record<string, string>;
+  /**
+   * Not a job for this tool after all (a "translation" whose source and
+   * target are the same language): the turn is answered by the LLM instead.
+   */
+  handOff?: true;
   /** Weather only: the reply asks which city. */
   needsCity?: boolean;
 };
