@@ -78,6 +78,11 @@ export interface DeepgramProxyOptions {
   sttSecondsUsedToday?: number;
   /** Deepgram listen endpoint (no query string) override, for tests. */
   endpoint?: string;
+  /**
+   * Clock for STT latency, metering and reconnect timing. Defaults to
+   * Date.now; tests inject a fake clock to get exact latencies.
+   */
+  now?: () => number;
 }
 
 export interface DeepgramProxy {
@@ -144,7 +149,7 @@ function buildDeepgramProxy(
     return degradedProxy(onTranscript, "stt_budget_exhausted");
   }
 
-  return createLiveProxy(onTranscript, log, sessionId, usedToday, options.endpoint);
+  return createLiveProxy(onTranscript, log, sessionId, usedToday, options.endpoint, options.now);
 }
 
 const MOCK_UTTERANCE_GAP_MS = 500;
@@ -223,6 +228,7 @@ function createLiveProxy(
   sessionId: string,
   sttSecondsUsedToday: number,
   endpoint: string = DEEPGRAM_WS_URL,
+  now: () => number = () => Date.now(),
 ): DeepgramProxy {
   if (!env.DEEPGRAM_API_KEY) {
     throw new Error("DEEPGRAM_API_KEY is required when live speech recognition is enabled");
@@ -296,15 +302,15 @@ function createLiveProxy(
     const text = segments.join(" ");
     segments = [];
     utterances += 1;
-    const now = Date.now();
-    const endedAt = speechEnd?.at ?? lastFrameAt ?? now;
-    const latencyMs = Math.max(1, (speechEnd?.finalAt ?? now) - endedAt);
+    const nowMs = now();
+    const endedAt = speechEnd?.at ?? lastFrameAt ?? nowMs;
+    const latencyMs = Math.max(1, (speechEnd?.finalAt ?? nowMs) - endedAt);
     speechEnd = null;
     onTranscript({
       type: "transcript_final",
       text,
       latencyMs,
-      sinceSpeechEndMs: Math.max(0, now - endedAt),
+      sinceSpeechEndMs: Math.max(0, nowMs - endedAt),
     });
   };
 
@@ -341,7 +347,7 @@ function createLiveProxy(
     connectionBytes += buf.byteLength;
     lastFrameAt = arrivedAt;
     socket.send(buf);
-    lastAudioAt = Date.now();
+    lastAudioAt = now();
     lastSentAt = lastAudioAt;
     unflushedBytes += buf.byteLength;
     if (unflushedBytes >= STT_FLUSH_EVERY_SECONDS * PCM_BYTES_PER_SECOND) flushUsage(false);
@@ -375,7 +381,7 @@ function createLiveProxy(
 
     connections += 1;
     const attempt = connections;
-    const startTime = Date.now();
+    const startTime = now();
     lastAudioAt = startTime;
     lastSentAt = startTime;
     let keepAlive: ReturnType<typeof setInterval> | null = null;
@@ -398,7 +404,7 @@ function createLiveProxy(
 
     const fail = (message: string): void => {
       settled = true;
-      retryAfter = Date.now() + RECONNECT_BACKOFF_MS;
+      retryAfter = now() + RECONNECT_BACKOFF_MS;
       recordFailure("deepgram");
       onTranscript({ type: "error", code: "deepgram_error", message });
     };
@@ -441,11 +447,11 @@ function createLiveProxy(
       // Deepgram's idle timeout. Long idles are let go (reconnect on demand).
       keepAlive = setInterval(() => {
         if (socket.readyState !== WebSocket.OPEN) return;
-        const now = Date.now();
-        if (now - lastAudioAt > KEEPALIVE_MAX_IDLE_MS) return;
-        if (now - lastSentAt < KEEPALIVE_INTERVAL_MS) return;
+        const nowMs = now();
+        if (nowMs - lastAudioAt > KEEPALIVE_MAX_IDLE_MS) return;
+        if (nowMs - lastSentAt < KEEPALIVE_INTERVAL_MS) return;
         socket.send(JSON.stringify({ type: "KeepAlive" }));
-        lastSentAt = now;
+        lastSentAt = nowMs;
         keepAlives += 1;
       }, KEEPALIVE_TICK_MS);
     });
@@ -489,7 +495,7 @@ function createLiveProxy(
         if (msg.is_final) {
           // Speech end = the frame holding this segment's last word.
           const end = msg.channel?.alternatives?.[0]?.words?.at(-1)?.end;
-          const arrivedAt = Date.now();
+          const arrivedAt = now();
           speechEnd = {
             at: (typeof end === "number" ? arrivalAt(end) : null) ?? lastFrameAt ?? arrivedAt,
             finalAt: arrivedAt,
@@ -527,7 +533,7 @@ function createLiveProxy(
       if (!closed) emitUtterance();
       flushUsage(true);
       if (dg === socket) dg = null;
-      const idleMs = Date.now() - lastAudioAt;
+      const idleMs = now() - lastAudioAt;
       log.info(
         {
           sessionId,
@@ -548,7 +554,7 @@ function createLiveProxy(
       // expected; the next audio frame reconnects. Only a drop while audio
       // was flowing counts as a provider failure.
       if (code !== 1000 && idleMs < IDLE_CLOSE_THRESHOLD_MS) {
-        retryAfter = Date.now() + RECONNECT_BACKOFF_MS;
+        retryAfter = now() + RECONNECT_BACKOFF_MS;
         recordFailure("deepgram");
       }
     });
@@ -605,7 +611,7 @@ function createLiveProxy(
       }
 
       const buf = Buffer.from(chunk);
-      const arrivedAt = Date.now();
+      const arrivedAt = now();
       if (dg?.readyState === WebSocket.OPEN) {
         forward(dg, buf, arrivedAt);
         return;
@@ -615,7 +621,7 @@ function createLiveProxy(
         return;
       }
       // No upstream (never opened, or Deepgram closed an idle stream).
-      if (Date.now() < retryAfter) return;
+      if (now() < retryAfter) return;
       const socket = connect();
       if (!socket) return;
       dg = socket;
