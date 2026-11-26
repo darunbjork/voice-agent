@@ -1,6 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { handleUtterance } from "../modules/agent/agent.service.js";
+import { safeGenerateAgentOutput } from "../modules/agent/gemini.service.js";
 import type { FastifyBaseLogger } from "fastify";
+
+// Pass-through spy: real behaviour, but lets us assert whether the LLM ran.
+vi.mock("../modules/agent/gemini.service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../modules/agent/gemini.service.js")>();
+  return {
+    ...actual,
+    safeGenerateAgentOutput: vi.fn(actual.safeGenerateAgentOutput),
+  };
+});
 
 const silentLogger = {
   info: () => undefined,
@@ -11,6 +21,10 @@ const silentLogger = {
 } as unknown as FastifyBaseLogger;
 
 describe("handleUtterance", () => {
+  beforeEach(() => {
+    vi.mocked(safeGenerateAgentOutput).mockClear();
+  });
+
   it("fast-path weather uses the tool card and skips Gemini", async () => {
     const { reply, viaFastPath } = await handleUtterance(
       {
@@ -28,8 +42,8 @@ describe("handleUtterance", () => {
     if (reply.card?.type === "weather") {
       expect(reply.card.location.toLowerCase()).toContain("stockholm");
     }
-    // Tool-only path should be very fast; assert the shape, not exact ms.
-    expect(reply.latencyMs.llm).toBeLessThan(50);
+    // Tool-only path: the LLM must not run (no wall-clock assertion).
+    expect(safeGenerateAgentOutput).not.toHaveBeenCalled();
   });
 
   it("fast-path help uses the help tool", async () => {
@@ -62,5 +76,7 @@ describe("handleUtterance", () => {
     expect(viaFastPath).toBe(false);
     expect(reply.intent).toBe("fallback");
     expect(reply.card).toBeNull();
+    // Proves the spy is wired: the slow path does call the LLM.
+    expect(safeGenerateAgentOutput).toHaveBeenCalledTimes(1);
   });
 });
