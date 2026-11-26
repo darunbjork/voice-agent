@@ -1,4 +1,5 @@
 import type { FastifyBaseLogger } from "fastify";
+import type { TtsSegment } from "./tts-segments.js";
 import { env } from "../../env.js";
 import { mockTtsChunk } from "../../utils/voice-mock.js";
 import {
@@ -68,11 +69,21 @@ async function releaseElevenLabsChars(chars: number, log: FastifyBaseLogger): Pr
   });
 }
 
+export type StreamTtsOptions = {
+  /**
+   * The reply split by language (see tts-segments.ts). ElevenLabs gets one
+   * request per segment, with `language_code`; the Aura fallback (English
+   * only) and mock mode speak the whole text.
+   */
+  segments?: TtsSegment[];
+};
+
 export function streamTts(
   text: string,
   onChunk: TtsChunkHandler,
   log: FastifyBaseLogger,
   sessionId: string,
+  options: StreamTtsOptions = {},
 ): TtsStream {
   assertWithinTtsBudget(text.length);
 
@@ -80,8 +91,9 @@ export function streamTts(
     return streamMockTts(text, onChunk, log, sessionId);
   }
 
+  const segments = options.segments?.filter((s) => s.text.trim().length > 0);
   try {
-    return streamLiveTts(text, onChunk, log, sessionId);
+    return streamLiveTts(text, onChunk, log, sessionId, segments?.length ? segments : [{ text }]);
   } catch (err) {
     if (err instanceof CircuitOpenError) {
       log.warn({ provider: err.provider }, "TTS circuit open — skipping");
@@ -162,6 +174,7 @@ function streamLiveTts(
   onChunk: TtsChunkHandler,
   log: FastifyBaseLogger,
   sessionId: string,
+  segments: TtsSegment[],
 ): TtsStream {
   const canFallback = Boolean(env.DEEPGRAM_API_KEY);
 
@@ -215,39 +228,56 @@ function streamLiveTts(
     if (audio) onChunk({ type: "tts_chunk", audio, sequenceNum: sequence++ });
   };
 
+  /** Segments ElevenLabs finished; a fallback speaks only the rest. */
+  let segmentsDone = 0;
+  const remainingText = (): string =>
+    segmentsDone === 0
+      ? text
+      : segments
+          .slice(segmentsDone)
+          .map((s) => s.text)
+          .join(" ");
+
+  /** One request per segment, in order, into the same audio stream. */
   const attemptElevenLabs = async (): Promise<Attempt> => {
-    const res = await fetch(elevenUrl, {
-      method: "POST",
-      headers: {
-        "xi-api-key": env.ELEVENLABS_API_KEY,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        text,
-        model_id: ELEVEN_MODEL,
-        voice_settings: { stability: 0.4, similarity_boost: 0.75 },
-      }),
-      signal: controller.signal,
-    });
+    for (const segment of segments) {
+      if (cancelled) break;
+      const res = await fetch(elevenUrl, {
+        method: "POST",
+        headers: {
+          "xi-api-key": env.ELEVENLABS_API_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: segment.text,
+          model_id: ELEVEN_MODEL,
+          voice_settings: { stability: 0.4, similarity_boost: 0.75 },
+          // Turbo v2.5 enforces the language: "god natt" is spoken as Swedish.
+          ...(segment.languageCode ? { language_code: segment.languageCode } : {}),
+        }),
+        signal: controller.signal,
+      });
 
-    if (!res.ok || !res.body) {
-      const errText = await res.text().catch(() => res.statusText);
-      return {
-        ok: false,
-        code: "tts_http_error",
-        message: `ElevenLabs ${res.status}: ${errText}`,
-        budgetExhausted: isElevenLabsQuotaError(res.status, errText),
-      };
-    }
-
-    const reader = res.body.getReader();
-    while (!cancelled) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value && value.byteLength > 0) {
-        elevenChunks += 1;
-        pushChunk(value);
+      if (!res.ok || !res.body) {
+        const errText = await res.text().catch(() => res.statusText);
+        return {
+          ok: false,
+          code: "tts_http_error",
+          message: `ElevenLabs ${res.status}: ${errText}`,
+          budgetExhausted: isElevenLabsQuotaError(res.status, errText),
+        };
       }
+
+      const reader = res.body.getReader();
+      while (!cancelled) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.byteLength > 0) {
+          elevenChunks += 1;
+          pushChunk(value);
+        }
+      }
+      segmentsDone += 1;
     }
     return { ok: true };
   };
@@ -259,7 +289,7 @@ function streamLiveTts(
         Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text: remainingText() }),
       signal: controller.signal,
     });
 
