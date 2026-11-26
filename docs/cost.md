@@ -18,19 +18,21 @@ Exact quotas change; check each provider's pricing page before relying on a numb
 
 ## Daily caps
 
-The app keeps its own daily counters (UTC day, in Redis, or in memory when `REDIS_URL` is unset) so it stops before the provider does. Defaults are in [`packages/api/src/env.ts`](../packages/api/src/env.ts).
+The app keeps its own daily counters (UTC day, in Redis, or in memory when `REDIS_URL` is unset) so it stops before the provider does. Defaults are in [`packages/api/src/env.ts`](../packages/api/src/env.ts); production overrides are in the `[env]` section of [`fly.toml`](../fly.toml).
 
-| Variable                | Default | What is counted                          | Over the cap                                                                                   |
-| ----------------------- | ------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `DAILY_MAX_TOKENS`      | 50,000  | Estimated Gemini tokens (chars ÷ 4)      | Turn refused: `429 budget_exceeded` + `Retry-After: 3600` (HTTP), `budget_exceeded` error (WS) |
-| `DAILY_MAX_TTS_CHARS`   | 650     | ElevenLabs characters, reserved up front | Reply is spoken by Deepgram Aura instead                                                       |
-| `DAILY_MAX_STT_SECONDS` | 3600    | Seconds of live audio sent to Deepgram   | `stt_budget_exhausted`; the client switches to text input (also mid-session)                   |
+| Variable                | Default | Production | What is counted                                                                                 | Over the cap                                                                                   |
+| ----------------------- | ------- | ---------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `DAILY_MAX_TOKENS`      | 50,000  | 300,000    | LLM tokens, Gemini and Groq together: reserved from an estimate, then settled to reported usage | Turn refused: `429 budget_exceeded` + `Retry-After: 3600` (HTTP), `budget_exceeded` error (WS) |
+| `DAILY_MAX_TTS_CHARS`   | 650     | 650        | ElevenLabs characters, reserved up front                                                        | Reply is spoken by Deepgram Aura instead                                                       |
+| `DAILY_MAX_STT_SECONDS` | 3600    | 3600       | Seconds of live audio sent to Deepgram                                                          | `stt_budget_exhausted`; the client switches to text input (also mid-session)                   |
+
+**Why 300,000 tokens in production.** The Gemini and Groq keys are both on free tiers with no billing, so the token cap does not protect money: it stops one visitor (or a script) from using up the free quotas for everyone else. The 50,000 default ran out after about 45 live questions in one day (each general question sends the ~860-token system prompt plus recent history). 300,000 allows a full day of demo use and still stops runaway usage. The Groq fallback does **not** bypass the cap: the tokens are reserved once per call in `generateLlm`, before Gemini or Groq is tried, against the same daily counter.
 
 - The token cap is checked on both the HTTP text route (`costGuard`) and the audio WebSocket, through the same `checkDailyTokenBudget` function.
 - At 80% of `DAILY_MAX_TOKENS` a structured-log alert is emitted (and sent to Sentry when `SENTRY_DSN` is set).
 - ElevenLabs characters are reserved **before** the request and released again if nothing was synthesised, so a failed call does not use up the cap.
 
-Per-call limits also apply: 500 estimated tokens per Gemini response and 600 characters per TTS reply.
+Per-call limits also apply: 1,500 estimated tokens per LLM call (system prompt + utterance; older history is trimmed to fit) and 600 characters per TTS reply.
 
 ## Fallback chain
 
@@ -52,11 +54,13 @@ The caps are plain environment variables, read at call time.
 
 **Production (Fly.io):**
 
+The caps are not secrets, so production values live in the `[env]` section of `fly.toml` (currently `DAILY_MAX_TOKENS = "300000"`; the others use the code defaults). Edit it and run `fly deploy`. For a quick change without a deploy:
+
 ```bash
 fly secrets set DAILY_MAX_TTS_CHARS=1000 DAILY_MAX_STT_SECONDS=1800
 ```
 
-Setting a secret restarts the machines with the new value. To check today's usage against the caps, sign in to the admin view (or call `GET /api/v1/admin/usage` with the admin credentials).
+Setting a secret restarts the machines with the new value, and a secret overrides the same name in `fly.toml`. To check today's usage against the caps, sign in to the admin view (or call `GET /api/v1/admin/usage` with the admin credentials).
 
 - `DAILY_MAX_TTS_CHARS=0` turns ElevenLabs off for the day (everything goes to Aura).
 - `DAILY_MAX_STT_SECONDS=0` turns live STT off (text input only).
