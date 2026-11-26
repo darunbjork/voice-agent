@@ -15,6 +15,8 @@ export type TranslateToolResult = {
   replyHint: string;
   /** What we already know when we had to ask; the next turn can complete it. */
   pending?: Record<string, string>;
+  /** Source and target are the same language: not a translation (LLM answers). */
+  handOff?: true;
 };
 
 const DEMO_DICTIONARY: Record<string, Record<string, string>> = {
@@ -94,17 +96,32 @@ export async function translateTool(input: TranslateToolInput): Promise<Translat
   }
 
   const toLang = language.code;
-  const fromLang = source?.code ?? "en";
   const targetName = display(language.name);
-  const sourceName = source ? display(source.name) : "English";
+  const handOff: TranslateToolResult = { card: null, replyHint: "", handOff: true };
 
-  const dictHit =
-    fromLang === "en" ? (DEMO_DICTIONARY[toLang]?.[original.toLowerCase()] ?? null) : null;
-
-  let translated = dictHit;
-  if (!env.VOICE_MOCK) {
-    const live = await liveTranslate(original, targetName, sourceName);
-    if (live !== null) translated = live;
+  let fromLang: string;
+  let translated: string | null;
+  if (source) {
+    // Source stated by the user: used as given.
+    fromLang = source.code;
+    // Never translate a language into itself: the LLM answers instead.
+    if (fromLang === toLang) return handOff;
+    translated = fromLang === "en" ? demoTranslate(original, toLang) : null;
+    if (!env.VOICE_MOCK) {
+      const live = await liveTranslate(original, targetName, display(source.name));
+      if (live !== null) translated = live;
+    }
+  } else {
+    // No source stated: detect it, never assume English ("Translate hej into
+    // English" is Swedish → English). The live call reports the language it
+    // detected; the demo dictionary is the fallback. If neither can tell, or
+    // the source is the target ("Translate hello into English"), the LLM answers.
+    const live = env.VOICE_MOCK ? null : await liveDetectAndTranslate(original, targetName);
+    const demo = live?.fromLang ? null : demoDetect(original, toLang);
+    const detectedFrom = live?.fromLang ?? demo?.fromLang;
+    if (!detectedFrom || detectedFrom === toLang) return handOff;
+    fromLang = detectedFrom;
+    translated = live?.translated ?? demo?.translated ?? null;
   }
 
   const card: TranslateCard = {
@@ -125,16 +142,76 @@ export async function translateTool(input: TranslateToolInput): Promise<Translat
   };
 }
 
+/** English → `toLang` from the demo dictionary. */
+function demoTranslate(original: string, toLang: string): string | null {
+  return DEMO_DICTIONARY[toLang]?.[original.toLowerCase()] ?? null;
+}
+
+/**
+ * Detects the source from the demo dictionary: an English entry, or a
+ * translation of one ("hej", "god morgon" → Swedish; Swedish is listed first,
+ * so "hej" is Swedish rather than Danish). A phrase it does not know is taken
+ * as English unless the target is English (then it cannot tell: null).
+ */
+function demoDetect(
+  original: string,
+  toLang: string,
+): { fromLang: string; translated: string | null } | null {
+  const phrase = original.toLowerCase();
+  const isEnglish = Object.values(DEMO_DICTIONARY).some((entries) => phrase in entries);
+  if (isEnglish) return { fromLang: "en", translated: demoTranslate(phrase, toLang) };
+  for (const [lang, entries] of Object.entries(DEMO_DICTIONARY)) {
+    const english = Object.entries(entries).find(([, value]) => value === phrase)?.[0];
+    if (english === undefined) continue;
+    return {
+      fromLang: lang,
+      translated: toLang === "en" ? english : demoTranslate(english, toLang),
+    };
+  }
+  return toLang === "en" ? null : { fromLang: "en", translated: null };
+}
+
+const DETECT_SYSTEM_PROMPT =
+  "You are a translation engine. Detect the language of the text, then translate it. " +
+  "Reply on one line as <ISO 639-1 code of the detected language>|<translation>. " +
+  "No quotes, no explanations, no romanization.";
+
+/**
+ * Live translation with source detection. `fromLang` is null when the model
+ * did not report a language (then the demo dictionary decides the source);
+ * the whole result is null when the call failed.
+ */
+async function liveDetectAndTranslate(
+  original: string,
+  target: string,
+): Promise<{ fromLang: string | null; translated: string } | null> {
+  const out = await callTranslationModel(
+    DETECT_SYSTEM_PROMPT,
+    `Translate into ${target}:\n${original}`,
+  );
+  if (out === null || !out.trim()) return null;
+  const m = out.trim().match(/^([a-z]{2,3})\s*\|\s*([\s\S]+)$/i);
+  if (!m?.[1] || !m[2]) return { fromLang: null, translated: stripWrappingQuotes(out) };
+  const fromLang = resolveLanguage(m[1])?.code ?? m[1].toLowerCase();
+  return { fromLang, translated: stripWrappingQuotes(m[2]) };
+}
+
 async function liveTranslate(
   original: string,
   target: string,
   sourceLang: string,
 ): Promise<string | null> {
-  const prompt = `Translate from ${sourceLang} to ${target}:\n${original}`;
+  const out = await callTranslationModel(
+    TRANSLATE_SYSTEM_PROMPT,
+    `Translate from ${sourceLang} to ${target}:\n${original}`,
+  );
+  return out === null ? null : stripWrappingQuotes(out);
+}
+
+async function callTranslationModel(system: string, prompt: string): Promise<string | null> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const out = await generateToolText(TRANSLATE_SYSTEM_PROMPT, prompt);
-      return stripWrappingQuotes(out);
+      return await generateToolText(system, prompt);
     } catch {
       // Provider unavailable, over budget, or circuit open — retry once for
       // transient spikes, then fall back to the demo dictionary (and its
