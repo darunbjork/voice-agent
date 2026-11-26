@@ -53,11 +53,13 @@ The public demo runs on free provider tiers with no card attached, so when a quo
 
 **Daily caps** (UTC day; defaults, all env-configurable), enforced on both the HTTP text route and the audio WebSocket:
 
-| Variable                | Default | Over the cap                                                               |
-| ----------------------- | ------- | -------------------------------------------------------------------------- |
-| `DAILY_MAX_TOKENS`      | 50,000  | Gemini turn refused: `429 budget_exceeded` (HTTP) / `budget_exceeded` (WS) |
-| `DAILY_MAX_TTS_CHARS`   | 650     | TTS routed to Deepgram Aura                                                |
-| `DAILY_MAX_STT_SECONDS` | 3600    | `stt_budget_exhausted`, client falls back to text input                    |
+| Variable                | Default | Production (`fly.toml`) | Over the cap                                                            |
+| ----------------------- | ------- | ----------------------- | ----------------------------------------------------------------------- |
+| `DAILY_MAX_TOKENS`      | 50,000  | 300,000                 | LLM turn refused: `429 budget_exceeded` (HTTP) / `budget_exceeded` (WS) |
+| `DAILY_MAX_TTS_CHARS`   | 650     | 650                     | TTS routed to Deepgram Aura                                             |
+| `DAILY_MAX_STT_SECONDS` | 3600    | 3600                    | `stt_budget_exhausted`, client falls back to text input                 |
+
+The Gemini and Groq keys are on free tiers with no billing, so the token cap guards the free quotas against abuse rather than money; 50,000 ran out after ~45 live questions in a day. Gemini and Groq share one counter, so the Groq fallback does not bypass the cap. See [docs/cost.md](docs/cost.md).
 
 A structured-log alert fires at 80% of `DAILY_MAX_TOKENS` (and a Sentry warning when `SENTRY_DSN` is set).
 
@@ -146,7 +148,7 @@ All variables are validated with Zod in [`packages/api/src/env.ts`](packages/api
 | `ELEVENLABS_VOICE_ID`   | `pFZP5JQG7iQjIQuC4Bku`          | premade "Lily", usable on the ElevenLabs free plan                                 |
 | `GEMINI_API_KEY`        | —                               | secret                                                                             |
 | `GEMINI_MODEL`          | `gemini-3.1-flash-lite-preview` |                                                                                    |
-| `DAILY_MAX_TOKENS`      | `50000`                         | must be ≥ 1                                                                        |
+| `DAILY_MAX_TOKENS`      | `50000`                         | must be ≥ 1; production sets `300000` in `fly.toml`                                |
 | `DAILY_MAX_TTS_CHARS`   | `650`                           | `0` disables ElevenLabs for the day                                                |
 | `DAILY_MAX_STT_SECONDS` | `3600`                          | `0` disables live STT for the day                                                  |
 | `JWT_SECRET`            | —                               | required, ≥ 32 chars                                                               |

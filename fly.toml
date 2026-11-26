@@ -13,6 +13,11 @@ primary_region = "arn"
   HOST = "0.0.0.0"
   PORT = "3001"
   VOICE_MOCK = "false"
+  # Daily LLM token cap (Gemini + Groq, one shared counter). Both keys are on
+  # free tiers with no billing, so this guards the free quotas against abuse;
+  # it is not a cost limit. The code default (50000) ran out after ~45 live
+  # questions in one day. See docs/cost.md.
+  DAILY_MAX_TOKENS = "300000"
 
 [http_service]
   internal_port = 3001
