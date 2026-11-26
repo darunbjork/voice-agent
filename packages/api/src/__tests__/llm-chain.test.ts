@@ -172,17 +172,45 @@ describe("runWithFallback (generic chain)", () => {
   });
 
   it("moves on immediately when an attempt fails", async () => {
-    const t = Date.now();
-    const r = await runWithFallback(
-      [
-        attempt("gemini", "a", async () => Promise.reject(geminiError(503))),
-        attempt("gemini", "b", async () => Promise.reject(geminiError(503))),
-        attempt("groq", "c", async () => ({ text: "C" })),
-      ],
-      opts,
-    );
-    expect(r.provider).toBe("groq");
-    expect(Date.now() - t).toBeLessThan(50);
+    // Fake timers: if the chain waited for the hedge (50 ms) or an attempt
+    // timeout (200 ms) before moving on, it could not finish while no fake
+    // time passes. Only promise callbacks run here.
+    vi.useFakeTimers();
+    try {
+      const order: string[] = [];
+      const run = (model: string, outcome: () => Promise<{ text: string }>) => async () => {
+        order.push(model);
+        return outcome();
+      };
+      let result: Awaited<ReturnType<typeof runWithFallback>> | undefined;
+      const pending = runWithFallback(
+        [
+          attempt(
+            "gemini",
+            "a",
+            run("a", () => Promise.reject(geminiError(503))),
+          ),
+          attempt(
+            "gemini",
+            "b",
+            run("b", () => Promise.reject(geminiError(503))),
+          ),
+          attempt(
+            "groq",
+            "c",
+            run("c", async () => ({ text: "C" })),
+          ),
+        ],
+        opts,
+      ).then((r) => (result = r));
+
+      await vi.advanceTimersByTimeAsync(0); // flush promise callbacks; no time passes
+      expect(order).toEqual(["a", "b", "c"]);
+      expect(result?.provider).toBe("groq");
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("hedges past hung attempts and aborts them once one answers", async () => {

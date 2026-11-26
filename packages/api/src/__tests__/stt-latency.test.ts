@@ -28,7 +28,8 @@ const silentLogger = {
 const PCM_BYTES_PER_SECOND = 32_000;
 /** 100 ms of 16 kHz 16-bit mono PCM. */
 const FRAME = new ArrayBuffer(PCM_BYTES_PER_SECOND / 10);
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+/** Poll interval for waitUntil only — never used to wait for time to pass. */
+const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 5));
 
 const saved = {
   voiceMock: env.VOICE_MOCK,
@@ -78,7 +79,7 @@ async function waitUntil(cond: () => boolean, ms = 2000): Promise<void> {
   const end = Date.now() + ms;
   while (!cond()) {
     if (Date.now() > end) throw new Error("timed out");
-    await sleep(5);
+    await tick();
   }
 }
 
@@ -100,72 +101,108 @@ function results(transcript: string, isFinal: boolean, words?: Array<[number, nu
 
 const finals = (msgs: ServerAudioMessage[]) =>
   msgs.flatMap((m) => (m.type === "transcript_final" ? [m] : []));
+const interims = (msgs: ServerAudioMessage[]) =>
+  msgs.filter((m) => m.type === "transcript_interim").length;
+
+/**
+ * Fake clock injected into the proxy: time only moves when the test sets it,
+ * so latencies are exact and no real sleeps are needed. The socket I/O to
+ * the fake Deepgram is still real, so each step waits for an event.
+ */
+let clock = 0;
 
 function openLive(endpoint: string, msgs: ServerAudioMessage[]): DeepgramProxy {
-  return createDeepgramProxy((m) => msgs.push(m), silentLogger, "lat", undefined, { endpoint });
+  return createDeepgramProxy((m) => msgs.push(m), silentLogger, "lat", undefined, {
+    endpoint,
+    now: () => clock,
+  });
 }
 
-describe("STT recognition delay (live proxy)", () => {
+/**
+ * Sends a Deepgram final at fake time `at` and waits until the proxy has read
+ * it (a final is echoed as transcript_interim), so the clock is not moved
+ * before the proxy took its arrival time.
+ */
+async function sendFinal(msgs: ServerAudioMessage[], at: number, message: string): Promise<void> {
+  clock = at;
+  const before = interims(msgs);
+  upstream!.send(message);
+  await waitUntil(() => interims(msgs) > before);
+}
+
+/** Sends UtteranceEnd at fake time `at` and returns the transcript_final. */
+async function endUtterance(msgs: ServerAudioMessage[], at: number) {
+  clock = at;
+  upstream!.send(JSON.stringify({ type: "UtteranceEnd" }));
+  await waitUntil(() => finals(msgs).length === 1);
+  return finals(msgs)[0]!;
+}
+
+/**
+ * Sends `count` 100 ms frames, frame i at fake time i * `everyMs`. Waits for
+ * the first frame to be forwarded (upstream open) so the rest go straight
+ * through instead of overflowing the pre-connect buffer.
+ */
+async function sendFrames(proxy: DeepgramProxy, count: number, everyMs: number): Promise<void> {
+  clock = 0;
+  proxy.sendAudio(FRAME);
+  await waitUntil(() => upstream !== null && received >= FRAME.byteLength);
+  for (let i = 1; i < count; i++) {
+    clock = i * everyMs;
+    proxy.sendAudio(FRAME);
+  }
+  await waitUntil(() => received >= count * FRAME.byteLength);
+}
+
+describe("STT recognition delay (live proxy, fake clock)", () => {
   beforeEach(() => {
     env.VOICE_MOCK = false;
     env.DEEPGRAM_LIVE = true;
     env.DEEPGRAM_API_KEY = "test-deepgram-key";
+    clock = 0;
   });
 
-  it("a 4 s utterance with a 200 ms recognition delay shows ~200 ms, not ~4.2 s", async () => {
+  it("a 4 s utterance with a 200 ms recognition delay shows 200 ms, not ~4.2 s", async () => {
     const endpoint = await fakeDeepgram();
     const msgs: ServerAudioMessage[] = [];
     proxy = openLive(endpoint, msgs);
 
-    // 4 s of speech, sent in real time (frame i covers i*0.1 … i*0.1+0.1 s).
-    for (let i = 0; i < 40; i++) {
-      proxy.sendAudio(FRAME);
-      if (i === 10) upstream?.send(results("so I was", false, [[0.1, 0.4]]));
-      await sleep(100);
-    }
-    await waitUntil(() => received >= 40 * FRAME.byteLength);
+    // 4 s of speech in real time: frame i covers i*0.1 … i*0.1+0.1 s, arrives at i*100 ms.
+    await sendFrames(proxy, 40, 100);
 
-    // Last word ends at 3.95 s (inside the last frame); Deepgram finalises 200 ms later.
-    await sleep(100); // the last frame arrived ~100 ms ago
-    await sleep(100);
-    upstream!.send(
+    // Last word ends at 3.95 s → frame 39, which arrived at 3900 ms.
+    // Deepgram's final arrives 200 ms later.
+    await sendFinal(
+      msgs,
+      4100,
       results("so I was thinking about tomorrow", true, [
         [0.1, 0.4],
         [3.6, 3.95],
       ]),
     );
-    // Deepgram's UtteranceEnd follows after its silence window.
-    await sleep(300);
-    upstream!.send(JSON.stringify({ type: "UtteranceEnd" }));
-    await waitUntil(() => finals(msgs).length === 1);
+    // UtteranceEnd follows after Deepgram's silence window.
+    const final = await endUtterance(msgs, 4400);
 
-    const final = finals(msgs)[0]!;
-    expect(final.latencyMs).toBeGreaterThanOrEqual(150);
-    expect(final.latencyMs).toBeLessThan(400);
-    // Whole-turn anchor: speech ended ~200 + 300 ms before the final was sent.
-    expect(final.sinceSpeechEndMs).toBeGreaterThanOrEqual(450);
-    expect(final.sinceSpeechEndMs).toBeLessThan(800);
-  }, 10_000);
+    expect(final.latencyMs).toBe(200);
+    // Whole-turn anchor: speech ended 4400 − 3900 ms before the final was sent.
+    expect(final.sinceSpeechEndMs).toBe(500);
+  });
 
   it("uses the last word of the last final segment of the utterance", async () => {
     const endpoint = await fakeDeepgram();
     const msgs: ServerAudioMessage[] = [];
     proxy = openLive(endpoint, msgs);
 
-    for (let i = 0; i < 10; i++) {
-      proxy.sendAudio(FRAME);
-      await sleep(50);
-    }
-    await waitUntil(() => upstream !== null && received >= 10 * FRAME.byteLength);
-    upstream!.send(results("first part", true, [[0.0, 0.3]]));
-    await sleep(250);
-    upstream!.send(results("second part", true, [[0.5, 0.95]]));
-    upstream!.send(JSON.stringify({ type: "UtteranceEnd" }));
-    await waitUntil(() => finals(msgs).length === 1);
+    // Frame i (i*0.1 s of audio) arrives at i*50 ms; frame 9 at 450 ms.
+    await sendFrames(proxy, 10, 50);
+    // First segment's last word (0.3 s → frame 3, 150 ms) must not be used.
+    await sendFinal(msgs, 500, results("first part", true, [[0.0, 0.3]]));
+    await sendFinal(msgs, 700, results("second part", true, [[0.5, 0.95]]));
+    const final = await endUtterance(msgs, 700);
 
-    // Frame 9 (0.9–1.0 s) arrived ~0 ms after the loop ended; the final came ~250 ms later.
-    expect(finals(msgs)[0]!.latencyMs).toBeGreaterThanOrEqual(200);
-    expect(finals(msgs)[0]!.latencyMs).toBeLessThan(450);
+    expect(final.text).toBe("first part second part");
+    expect(final.latencyMs).toBe(700 - 450);
+    expect(final.sinceSpeechEndMs).toBe(700 - 450);
   });
 
   it("without word timings, measures from the last audio frame before the final", async () => {
@@ -173,18 +210,11 @@ describe("STT recognition delay (live proxy)", () => {
     const msgs: ServerAudioMessage[] = [];
     proxy = openLive(endpoint, msgs);
 
-    for (let i = 0; i < 20; i++) {
-      proxy.sendAudio(FRAME);
-      await sleep(50);
-    }
-    await waitUntil(() => upstream !== null && received >= 20 * FRAME.byteLength);
-    await sleep(150);
-    upstream!.send(results("no timings", true));
-    upstream!.send(JSON.stringify({ type: "UtteranceEnd" }));
-    await waitUntil(() => finals(msgs).length === 1);
+    await sendFrames(proxy, 20, 50); // last frame at 950 ms
+    await sendFinal(msgs, 1100, results("no timings", true));
+    const final = await endUtterance(msgs, 1100);
 
-    expect(finals(msgs)[0]!.latencyMs).toBeGreaterThanOrEqual(130);
-    expect(finals(msgs)[0]!.latencyMs).toBeLessThan(400);
+    expect(final.latencyMs).toBe(150);
   });
 });
 
