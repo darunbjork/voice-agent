@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { env } from "../env.js";
 import { weatherTool } from "../modules/agent/tools/weather.tool.js";
 import { reminderTool } from "../modules/agent/tools/reminder.tool.js";
@@ -7,6 +7,15 @@ import { summarizeTool } from "../modules/agent/tools/summarize.tool.js";
 import { helpTool } from "../modules/agent/tools/help.tool.js";
 import { runTool, listRegisteredIntents } from "../modules/agent/tool.registry.js";
 import { classifyByKeywords } from "../modules/agent/intent.classifier.js";
+
+/** Friday 27 Nov 2026, 14:00 in Stockholm: reminder dates are absolute (C11). */
+function fridayAt1400(): void {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-27T13:00:00Z"));
+}
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("tool handlers", () => {
   it("weather returns a weather card with the requested location", async () => {
@@ -41,13 +50,14 @@ describe("tool handlers", () => {
   });
 
   it("reminder extracts note", async () => {
+    fridayAt1400();
     const r = await reminderTool({
       userText: "Remind me to call the recruiter tomorrow",
       slots: {},
     });
     expect(r.card.type).toBe("reminder");
     expect(r.card.note.toLowerCase()).toContain("call the recruiter");
-    expect(r.card.time.toLowerCase()).toContain("tomorrow");
+    expect(r.card.time).toBe("Sat 28 Nov");
   });
 
   it("translate uses demo dictionary and reports hit", async () => {
@@ -170,32 +180,35 @@ describe("tool handlers", () => {
   });
 
   it("reminder does not duplicate the trailing time word", async () => {
+    fridayAt1400();
     const text = "Remind me to follow up with the recruiter tomorrow";
     const fast = classifyByKeywords(text);
     expect(fast?.intent).toBe("reminder");
     const r = await reminderTool({ userText: text, slots: fast?.slots ?? {} });
     expect(r.replyHint).not.toMatch(/tomorrow.*tomorrow/i);
     expect(r.card.note.toLowerCase()).not.toMatch(/tomorrow$/);
-    expect(r.card.time.toLowerCase()).toBe("tomorrow");
+    expect(r.card.time).toBe("Sat 28 Nov");
   });
 
   it("reminder stops the note before an at-time", async () => {
+    fridayAt1400();
     const text = "Remind me to call Alex at 5pm";
     const fast = classifyByKeywords(text);
     expect(fast?.intent).toBe("reminder");
     const r = await reminderTool({ userText: text, slots: fast?.slots ?? {} });
     expect(r.card.note).toBe("call Alex");
-    expect(r.card.time).toBe("at 5pm");
+    expect(r.card.time).toBe("Fri 27 Nov, 17:00");
   });
 
   it("reminder extracts the task and weekday when the date comes first", async () => {
+    fridayAt1400();
     const text = "Remind me on Monday, I have a meeting";
     const fast = classifyByKeywords(text);
     expect(fast?.intent).toBe("reminder");
     const r = await reminderTool({ userText: text, slots: fast?.slots ?? {} });
     expect(r.card.note).toBe("I have a meeting");
-    expect(r.card.time).toBe("Monday");
-    expect(r.replyHint).toContain("that I have a meeting, Monday");
+    expect(r.card.time).toBe("Mon 30 Nov");
+    expect(r.replyHint).toContain("that I have a meeting, on Monday, 30 November");
   });
 
   it("summarize strips the command prefix from points and source", async () => {

@@ -227,13 +227,15 @@ describe("summarize tool (live mode, stubbed Gemini)", () => {
 describe("reminder tool (live mode, real database)", () => {
   it("persists a reminder and confirms it", async () => {
     goLive();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-27T13:00:00Z")); // Fri 14:00 Stockholm
     const r = await reminderTool({
       userText: "Remind me to water the plants tomorrow",
       slots: {},
     });
     expect(r.card.note).toBe("water the plants");
     expect(r.replyHint).toBe(
-      "I saved a reminder to water the plants tomorrow. I can't send notifications, so nothing will alert you when it is due.",
+      "I saved a reminder to water the plants tomorrow, Saturday 28 November. I can't send notifications, so nothing will alert you when it is due.",
     );
 
     const prisma = getPrisma();
@@ -242,8 +244,9 @@ describe("reminder tool (live mode, real database)", () => {
       orderBy: { createdAt: "desc" },
     });
     if (!row) throw new Error("reminder row was not persisted");
-    expect(row.timeText.toLowerCase()).toContain("tomorrow");
-    expect(row.scheduledAt).not.toBeNull();
+    expect(row.timeText).toBe("Sat 28 Nov");
+    expect(row.scheduledAt?.toISOString()).toBe("2026-11-28T08:00:00.000Z");
+    vi.useRealTimers();
 
     await prisma.reminder.delete({ where: { id: row.id } });
   });

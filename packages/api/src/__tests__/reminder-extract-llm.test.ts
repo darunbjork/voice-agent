@@ -130,9 +130,14 @@ describe("reminder extraction goes through generateLlm", () => {
     env.DAILY_MAX_TOKENS = 1000;
     await incrementUsage({ tokens: 1000 });
 
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-27T09:00:00Z")); // Fri 10:00 Stockholm
     const r = await reminderTool({ userText: SPOKEN, slots: {} });
-    expect(r.card).toEqual({ type: "reminder", ...PARSED });
-    expect(r.replyHint).toMatch(/^I saved a reminder to call mom at 14:30\./);
+    vi.useRealTimers();
+    expect(r.card).toEqual({ type: "reminder", note: "call mom", time: "Fri 27 Nov, 14:30" });
+    expect(r.replyHint).toMatch(
+      /^I saved a reminder to call mom today, Friday 27 November, at 14:30\./,
+    );
     expect(generateContentMock).not.toHaveBeenCalled();
   });
 

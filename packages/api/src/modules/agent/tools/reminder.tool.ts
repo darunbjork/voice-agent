@@ -1,7 +1,7 @@
 import type { ReminderCard } from "@voice-agent/shared-types";
 import { env } from "../../../env.js";
 import { getPrisma } from "../../../utils/db.js";
-import { parseSchedule } from "../reminder-parser.js";
+import { resolveReminderWhen } from "../reminder-parser.js";
 import { extractReminder } from "../reminder-extract.js";
 
 export { parseSchedule } from "../reminder-parser.js";
@@ -20,14 +20,22 @@ export async function reminderTool(input: ReminderToolInput): Promise<ReminderTo
   // Structured output {task, time} live; the pattern parser in mock mode.
   const extracted = await extractReminder(input.userText);
   const note = extracted.note || input.slots.note?.trim() || "your task";
-  const time = extracted.time || input.slots.time?.trim() || "later today";
+  const said = extracted.time || input.slots.time?.trim() || "later today";
 
-  const card: ReminderCard = { type: "reminder", note, time };
+  // C11: "tomorrow" is resolved here, in code, to an absolute Stockholm date.
+  // Card and database get the date ("Sat 28 Nov, 15:00"), which stays right
+  // the day after; the reply keeps the words said ("tomorrow, Saturday 28
+  // November"). A time that cannot be resolved is kept as said, undated.
+  const when = resolveReminderWhen(said);
+  const shown = when?.display ?? said;
+  const spoken = when?.spoken ?? said;
+
+  const card: ReminderCard = { type: "reminder", note, time: shown };
 
   if (env.VOICE_MOCK) {
     return {
       card,
-      replyHint: `Demo mode: this reminder was not saved: ${reminderSummary(note, time)}. ${NO_ALERTS}`,
+      replyHint: `Demo mode: this reminder was not saved: ${reminderSummary(note, spoken)}. ${NO_ALERTS}`,
     };
   }
 
@@ -35,21 +43,21 @@ export async function reminderTool(input: ReminderToolInput): Promise<ReminderTo
     await getPrisma().reminder.create({
       data: {
         note,
-        timeText: time,
-        scheduledAt: parseSchedule(time),
+        timeText: shown,
+        scheduledAt: when?.at ?? null,
       },
     });
   } catch {
     // DB down or table missing — stay honest instead of claiming it was saved.
     return {
       card,
-      replyHint: `I could not save the reminder to ${note} ${time}. Please try again.`,
+      replyHint: `I could not save the reminder to ${note} ${spoken}. Please try again.`,
     };
   }
 
   return {
     card,
-    replyHint: `I saved a reminder ${reminderSummary(note, time)}. ${NO_ALERTS}`,
+    replyHint: `I saved a reminder ${reminderSummary(note, spoken)}. ${NO_ALERTS}`,
   };
 }
 

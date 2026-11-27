@@ -25,10 +25,12 @@ const ExtractionSchema = z.object({
 export const REMINDER_EXTRACT_PROMPT = `You extract a reminder from a voice transcript. The transcript comes from speech recognition: numbers may be spoken as words and punctuation may be wrong.
 Return JSON with:
 - "task": what the user wants to be reminded to do, starting with the verb, without "remind me to" and without the time ("call mom"). null if none is given.
-- "time": when, with any clock time written as 24-hour HH:MM ("fourteen thirty" → "14:30", "half past two pm" → "14:30", "quarter to nine" → "08:45", "eighteen hundred" → "18:00") and day words kept ("tomorrow 09:05", "Monday", "Friday 17:00"). null if no time is given. Never guess a time.
+- "time": when, with any clock time written as 24-hour HH:MM ("fourteen thirty" → "14:30", "half past two pm" → "14:30", "quarter to nine" → "08:45", "eighteen hundred" → "18:00") and day words kept ("tomorrow 09:05", "Monday", "Friday 17:00"). Keep relative words as said, with numbers as digits ("next Monday", "in 2 hours", "tonight"). A bare hour with no minutes and no am/pm stays as said ("tomorrow at 3"). Never turn words into a date: the app works out the date. null if no time is given. Never guess a time.
 Examples:
 "Remind me at fourteen thirty to call mom" → {"task":"call mom","time":"14:30"}
 "remind me tomorrow at nine oh five to send the invoice" → {"task":"send the invoice","time":"tomorrow 09:05"}
+"remind me to call Alex tomorrow at three" → {"task":"call Alex","time":"tomorrow at 3"}
+"remind me in two hours to stretch" → {"task":"stretch","time":"in 2 hours"}
 "Remind me to water the plants" → {"task":"water the plants","time":null}`;
 
 /** "14:30" → "at 14:30", "tomorrow 09:05" → "tomorrow at 09:05"; day words kept. */
