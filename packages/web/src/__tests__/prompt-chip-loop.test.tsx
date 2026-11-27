@@ -21,6 +21,11 @@ beforeAll(() => {
   }
 });
 
+// The server is already awake here; the C10 warm-up is tested in app-warmup.test.tsx.
+vi.mock("../hooks/useServerWarmup.js", () => ({
+  useServerWarmup: () => ({ status: "ready", elapsedS: 0, retry: () => undefined }),
+}));
+
 vi.mock("../lib/feedback-tone.js", () => ({
   playFeedbackTone: vi.fn(),
 }));

@@ -15,6 +15,8 @@ import { SkipLink } from "./components/a11y/SkipLink.js";
 import { LiveRegion } from "./components/VoiceAgent/LiveRegion.js";
 import { AdminPage } from "./pages/AdminPage.js";
 import { LatencyHUD, type LatencyStage } from "./components/VoiceAgent/LatencyHUD.js";
+import { ServerStatusChip } from "./components/VoiceAgent/ServerStatusChip.js";
+import { useServerWarmup } from "./hooks/useServerWarmup.js";
 import type { AgentState } from "./state/agent-state.js";
 import { agentReducer, initialAgentSnapshot } from "./state/agent-state.js";
 import { composeLiveMessage } from "./state/live-message.js";
@@ -66,6 +68,13 @@ export function App() {
   const [noAudio, setNoAudio] = useState(false);
   /** HUD TOTAL: end of speech → first TTS audio byte of the same turn. */
   const turnClockRef = useRef(createTurnClock());
+  /** C10: one GET /health on load wakes the API and DB (Fly scales them to zero). */
+  const warmup = useServerWarmup();
+  const serverReady = warmup.status === "ready";
+  /** Input given while the server wakes; it is sent once the server is ready. */
+  const pendingTextRef = useRef<string | null>(null);
+  const pendingMicRef = useRef(false);
+  const [waitingForServer, setWaitingForServer] = useState(false);
 
   const appendLog = useCallback((line: string) => {
     setLog((prev) => [line, ...prev].slice(0, 20));
@@ -295,6 +304,14 @@ export function App() {
 
   const sendText = useCallback(
     (text: string) => {
+      if (!serverReady) {
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        pendingTextRef.current = trimmed; // the latest one wins
+        setWaitingForServer(true);
+        appendLog("waiting for the server");
+        return;
+      }
       if (inFlightTurnRef.current !== null) return; // one at a time
       inFlightTurnRef.current = performance.now();
 
@@ -318,8 +335,36 @@ export function App() {
       proxy.sendMessage({ type: "text_input", text: trimmed });
       appendLog(`text_input → ${trimmed.slice(0, 48)}`);
     },
-    [proxy, tts, appendLog],
+    [proxy, tts, appendLog, serverReady],
   );
+
+  const startMic = useCallback(async () => {
+    if (!serverReady) {
+      pendingMicRef.current = true;
+      setWaitingForServer(true);
+      appendLog("mic waits for the server");
+      return;
+    }
+    if (!proxy.isConnected) proxy.connect();
+    setStage("stt");
+    await capture.start();
+    appendLog("mic on");
+  }, [serverReady, proxy, capture, appendLog]);
+
+  // C10: the turn given while waking goes out as soon as the server is ready.
+  useEffect(() => {
+    if (!serverReady) return;
+    setWaitingForServer(false);
+    if (pendingMicRef.current) {
+      pendingMicRef.current = false;
+      void startMic();
+    }
+    const text = pendingTextRef.current;
+    if (text !== null) {
+      pendingTextRef.current = null;
+      sendText(text);
+    }
+  }, [serverReady, startMic, sendText]);
 
   const visualState: AgentState = agent.state;
 
@@ -404,6 +449,13 @@ export function App() {
         <p style={{ margin: "0 0 0.6rem", color: "var(--muted)", fontSize: 14 }}>
           Production voice pipeline · Deepgram · Gemini · ElevenLabs
         </p>
+        <div>
+          <ServerStatusChip
+            status={warmup.status}
+            elapsedS={warmup.elapsedS}
+            onRetry={warmup.retry}
+          />
+        </div>
         <button
           type="button"
           onClick={() => setView("admin")}
@@ -452,12 +504,7 @@ export function App() {
           <MicButton
             isCapturing={capture.isCapturing}
             disabled={capture.status === "requesting_permission"}
-            onStart={async () => {
-              if (!proxy.isConnected) proxy.connect();
-              setStage("stt");
-              await capture.start();
-              appendLog("mic on");
-            }}
+            onStart={startMic}
             onStop={() => {
               capture.stop();
               setStage(null);
@@ -465,6 +512,16 @@ export function App() {
             }}
             variant={micVariant}
           />
+
+          {waitingForServer && (
+            <div
+              className="banner banner--info"
+              role="status"
+              style={{ justifyContent: "center", textAlign: "center", marginBottom: "0.6rem" }}
+            >
+              Waiting for the server… your request goes through as soon as it is awake.
+            </div>
+          )}
 
           {feedback && (
             <div

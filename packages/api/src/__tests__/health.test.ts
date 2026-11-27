@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../app.js";
+import { getDailyUsage } from "../utils/usage-tracker.js";
 
 describe("GET /health", () => {
   let app: FastifyInstance | undefined;
@@ -43,5 +44,18 @@ describe("GET /health", () => {
       openedAt: null,
       lastFailureAt: null,
     });
+  });
+
+  // C10: the web app calls /health on every page load to wake a scaled-to-zero
+  // API and DB. That warm-up must not spend any LLM/TTS/STT budget.
+  it("the page-load warm-up uses no budget: repeated /health calls change no usage", async () => {
+    if (!app) throw new Error("app not initialized");
+    const before = await getDailyUsage();
+    for (let i = 0; i < 3; i++) {
+      const res = await app.inject({ method: "GET", url: "/health" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().dailyTokens).toBe(before.tokens);
+    }
+    expect(await getDailyUsage()).toEqual(before);
   });
 });
