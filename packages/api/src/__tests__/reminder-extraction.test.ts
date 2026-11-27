@@ -140,10 +140,17 @@ describe("structured reminder extraction (live)", () => {
 
   it("the reminder tool saves the extracted task and time", async () => {
     llmReturns({ task: "water the plants", time: "18:00" });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-27T13:00:00Z")); // Fri 14:00 Stockholm
     const r = await reminderTool({
       userText: "remind me eighteen hundred to water the plants",
       slots: {},
     });
-    expect(r.card).toEqual({ type: "reminder", note: "water the plants", time: "at 18:00" });
+    vi.useRealTimers();
+    expect(r.card).toEqual({
+      type: "reminder",
+      note: "water the plants",
+      time: "Fri 27 Nov, 18:00",
+    });
   });
 });
