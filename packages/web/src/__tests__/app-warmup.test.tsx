@@ -4,7 +4,7 @@
 // the API and the DB, shows "Waking up the server… Ns" with a live counter,
 // then "Ready". After 60 s without an answer it shows a Retry button. Input
 // while waking is kept and sent once the server is ready.
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClientAudioMessage } from "@voice-agent/shared-types";
 import { App } from "../App.js";
@@ -188,7 +188,9 @@ describe("cold start: waking → 60 s → retry", () => {
     expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
     expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(11);
     expect(chip()).toMatch(/Server didn't wake up/);
-    const retry = screen.getByRole("button", { name: /retry/i });
+    const retry = within(screen.getByTestId("server-status")).getByRole("button", {
+      name: /retry/i,
+    });
 
     // No more requests after giving up, until the visitor asks.
     const calls = fetchMock.mock.calls.length;
@@ -211,7 +213,9 @@ describe("cold start: waking → 60 s → retry", () => {
     await advance(1_000);
     expect(requests[0]?.init?.signal?.aborted).toBe(true);
     expect(chip()).toMatch(/Server didn't wake up/);
-    expect(screen.getByRole("button", { name: /retry/i })).toBeTruthy();
+    expect(
+      within(screen.getByTestId("server-status")).getByRole("button", { name: /retry/i }),
+    ).toBeTruthy();
   });
 });
 
@@ -263,5 +267,45 @@ describe("input while waking waits, then sends", () => {
     });
     expect(ctl.sent).toEqual([{ type: "text_input", text: "hello" }]);
     expect(screen.queryByText(/Waiting for the server/)).toBeNull();
+  });
+});
+
+// C10b: the header chip is above the fold and easy to miss; the waking state
+// is also shown right by the mic and the text input.
+describe("waking state next to the mic and the input", () => {
+  const inline = () => screen.queryByTestId("server-status-inline");
+
+  it("shows the live waking status between the mic and the input", async () => {
+    render(<App />);
+    await advance(3_000);
+    const status = screen.getByTestId("server-status-inline");
+    expect(status.textContent).toMatch(/Waking up the server… 3s/);
+    const mic = screen.getByRole("button", { name: "Start microphone" });
+    const input = screen.getByLabelText("Message");
+    // DOM order: mic → status → input.
+    expect(mic.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(status.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(input.getAttribute("placeholder")).toMatch(/sent when ready/i);
+  });
+
+  it("goes away once ready; the input placeholder is back to normal", async () => {
+    render(<App />);
+    await answer(0, healthy());
+    expect(inline()).toBeNull();
+    expect(screen.getByLabelText("Message").getAttribute("placeholder")).toBe("Type a message…");
+  });
+
+  it("after 60 s it offers Retry next to the input too", async () => {
+    render(<App />);
+    await advance(60_000);
+    const status = inline();
+    expect(status?.textContent).toMatch(/Server didn't wake up/);
+    const retry = within(status as HTMLElement).getByRole("button", { name: /retry/i });
+    const calls = fetchMock.mock.calls.length;
+    act(() => {
+      fireEvent.click(retry);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(calls + 1);
+    expect(inline()?.textContent).toMatch(/Waking up the server… 0s/);
   });
 });

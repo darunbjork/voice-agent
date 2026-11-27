@@ -192,6 +192,14 @@ export function useTTSPlayer(options: UseTTSPlayerOptions = {}) {
     return computePlaybackProgress(sessionStartRef.current, sessionEndRef.current, ctx.currentTime);
   }, []);
 
+  /** Audio still scheduled to play, in ms (0 when nothing is queued). */
+  const remainingMs = useCallback((): number => {
+    const ctx = ctxRef.current;
+    const end = sessionEndRef.current;
+    if (!ctx || end === null) return 0;
+    return Math.max(0, Math.round((end - ctx.currentTime) * 1000));
+  }, []);
+
   useEffect(() => {
     return () => {
       cancelledRef.current = true;
@@ -224,7 +232,8 @@ export function useTTSPlayer(options: UseTTSPlayerOptions = {}) {
       cancel,
       prepare,
       getProgress,
+      remainingMs,
     }),
-    [status, error, enqueue, markDone, cancel, prepare, getProgress],
+    [status, error, enqueue, markDone, cancel, prepare, getProgress, remainingMs],
   );
 }

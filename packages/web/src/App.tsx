@@ -29,6 +29,14 @@ import "./styles/globals.css";
 
 const VAD_MIN_SPEECH_MS = 100;
 
+/**
+ * C10b: after tts_done the reply text is shown at the latest this long after
+ * the scheduled audio ends, whatever the player reports. Live, a reply was
+ * spoken but its words stayed hidden (reveal never completed) until the next
+ * message, because the player never reported the end of playback.
+ */
+export const REVEAL_END_MARGIN_MS = 1_000;
+
 function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -106,6 +114,12 @@ export function App() {
   }, []);
 
   const [reveal, dispatchReveal] = useReducer(revealReducer, initialRevealState);
+  const revealEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearRevealEnd = useCallback(() => {
+    if (revealEndTimerRef.current !== null) clearTimeout(revealEndTimerRef.current);
+    revealEndTimerRef.current = null;
+  }, []);
+  useEffect(() => clearRevealEnd, [clearRevealEnd]);
 
   const waveform = useWaveform(64);
 
@@ -170,6 +184,7 @@ export function App() {
         ttsWaitStartedRef.current = performance.now();
         ttsFirstByteRef.current = false;
         setNoAudio(false);
+        clearRevealEnd();
         if (typeof tts.getProgress === "function") {
           dispatchReveal({
             type: "START",
@@ -202,6 +217,14 @@ export function App() {
         setStage(null);
         if (!ttsFirstByteRef.current) setNoAudio(true);
         tts.markDone();
+        // The turn is over on the server: the text must not depend on the
+        // player reporting the end of playback.
+        const remaining = typeof tts.remainingMs === "function" ? tts.remainingMs() : 0;
+        clearRevealEnd();
+        revealEndTimerRef.current = setTimeout(() => {
+          revealEndTimerRef.current = null;
+          dispatchReveal({ type: "COMPLETE" });
+        }, remaining + REVEAL_END_MARGIN_MS);
       },
       onError: (code, message) => {
         inFlightTurnRef.current = null;
@@ -513,6 +536,15 @@ export function App() {
             variant={micVariant}
           />
 
+          {!serverReady && (
+            <ServerStatusChip
+              variant="inline"
+              status={warmup.status}
+              elapsedS={warmup.elapsedS}
+              onRetry={warmup.retry}
+            />
+          )}
+
           {waitingForServer && (
             <div
               className="banner banner--info"
@@ -567,7 +599,11 @@ export function App() {
             </button>
           </div>
 
-          <TextInput onSubmitText={sendText} disabled={visualState === "processing"} />
+          <TextInput
+            onSubmitText={sendText}
+            disabled={visualState === "processing"}
+            {...(serverReady ? {} : { placeholder: "Type now — sent when ready…" })}
+          />
         </VoiceAgentLayout>
       </main>
 

@@ -4,16 +4,27 @@ export type ServerStatusChipProps = {
   status: WarmupStatus;
   elapsedS: number;
   onRetry: () => void;
+  /**
+   * "header": the page-level live region. "inline": the same state next to
+   * the mic and input (C10b), not a second live region, so screen readers
+   * hear it once.
+   */
+  variant?: "header" | "inline";
 };
 
 /** C10: tells visitors a cold start is normal, not a broken app. */
-export function ServerStatusChip({ status, elapsedS, onRetry }: ServerStatusChipProps) {
+export function ServerStatusChip({
+  status,
+  elapsedS,
+  onRetry,
+  variant = "header",
+}: ServerStatusChipProps) {
+  const inline = variant === "inline";
   return (
     <div
-      data-testid="server-status"
-      className={`server-chip server-chip--${status}`}
-      role="status"
-      aria-live="polite"
+      data-testid={inline ? "server-status-inline" : "server-status"}
+      className={`server-chip server-chip--${status}${inline ? " server-chip--inline" : ""}`}
+      {...(inline ? {} : { role: "status", "aria-live": "polite" as const })}
     >
       {status === "waking" && (
         <>

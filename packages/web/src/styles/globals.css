@@ -322,6 +322,16 @@ input {
   color: #fca5a5;
 }
 
+/* Next to the mic and input: full width so it is hard to miss. */
+.server-chip--inline {
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 0.85rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 12px;
+}
+
 .server-chip .banner__action {
   margin-left: 0;
   padding: 0.15rem 0.5rem;
