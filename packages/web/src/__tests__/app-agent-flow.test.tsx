@@ -226,3 +226,66 @@ describe("App agent state flow", () => {
     expect(status()).toBe("Idle");
   });
 });
+
+// C9 — a turn that ends without audio (TTS failed or off) shows TOTAL as "—",
+// not "pending": there will be no first audio byte to time.
+describe("HUD TOTAL when a turn ends without audio", () => {
+  const hud = (): HTMLElement => {
+    const el = document.querySelector<HTMLElement>('section[role="status"][aria-label^="Latency"]');
+    if (!el) throw new Error("latency HUD not found");
+    return el;
+  };
+  const totalTile = (): string => {
+    const tiles = hud().querySelectorAll(":scope > div");
+    return tiles[tiles.length - 1]?.textContent ?? "";
+  };
+
+  it("while waiting for audio, TOTAL is pending", async () => {
+    render(<App />);
+    await pressMic();
+    await speakUntilAgentResponds();
+    expect(hud().getAttribute("aria-label")).toMatch(/Total pending/);
+  });
+
+  it("tts_done without any audio → TOTAL shows —, not pending", async () => {
+    render(<App />);
+    await pressMic();
+    await speakUntilAgentResponds();
+    act(() => {
+      handlers().onTtsDone?.();
+    });
+    expect(hud().getAttribute("aria-label")).not.toMatch(/pending/);
+    expect(hud().getAttribute("aria-label")).toMatch(/Total —, no audio/);
+    expect(totalTile()).toBe("Total—");
+    expect(hud().textContent).toMatch(/No audio/);
+    expect(hud().textContent).not.toMatch(/Waiting for a request/);
+  });
+
+  it("a TTS error before any audio → TOTAL shows —, not pending", async () => {
+    render(<App />);
+    await pressMic();
+    await speakUntilAgentResponds();
+    act(() => {
+      handlers().onError?.("tts_stream_error", "TTS failed");
+    });
+    expect(hud().getAttribute("aria-label")).not.toMatch(/pending/);
+    expect(hud().getAttribute("aria-label")).toMatch(/Total —, no audio/);
+    expect(totalTile()).toBe("Total—");
+  });
+
+  it("with audio, TOTAL is a number and the next turn starts pending again", async () => {
+    render(<App />);
+    await pressMic();
+    await speakUntilAgentResponds();
+    act(() => {
+      handlers().onTtsDone?.();
+    });
+    await speakUntilAgentResponds();
+    expect(hud().getAttribute("aria-label")).toMatch(/Total pending/);
+    act(() => {
+      handlers().onTtsChunk?.(new ArrayBuffer(8), 0);
+    });
+    expect(hud().getAttribute("aria-label")).toMatch(/Total \d+ milliseconds/);
+    expect(hud().getAttribute("aria-label")).not.toMatch(/no audio/);
+  });
+});

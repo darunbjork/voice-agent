@@ -287,6 +287,18 @@ describe("audio WebSocket turns always end in a reply or a visible error", () =>
     expect(replies(msgs)).toEqual(["second answer"]);
   });
 
+  it("a reply whose speech cannot start still ends with tts_done (C9)", async () => {
+    // Over the 600-character TTS cap: streamTts throws before any audio.
+    handleUtteranceMock.mockImplementation(async () => reply("x".repeat(700)));
+    const msgs = await session(
+      (ws) => ask(ws, "Tell me everything"),
+      (m) => m.some((x) => x.type === "tts_done"),
+    );
+    expect(replies(msgs)).toHaveLength(1);
+    const types = msgs.map((m) => m.type);
+    expect(types.indexOf("tts_done")).toBeGreaterThan(types.indexOf("agent_response"));
+  });
+
   it("mergeTranscripts joins text and keeps the latest latency", () => {
     expect(
       mergeTranscripts(

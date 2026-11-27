@@ -188,6 +188,9 @@ export async function audioRoutes(
       } catch (err) {
         log.warn({ err }, "TTS not started");
         currentTts = null;
+        // The client waits for audio until tts_done; without it the HUD and
+        // the agent state stayed on "speaking / pending" forever (C9).
+        sendSafe({ type: "tts_done" });
       }
     };
 

@@ -6,6 +6,8 @@ export type LatencyHUDProps = {
   latency: LatencyBreakdown | null;
   stage?: LatencyStage | null;
   label?: string;
+  /** The turn ended without any audio (TTS failed or off): TOTAL is "—", not pending. */
+  noAudio?: boolean;
 };
 
 type MetricKey = keyof LatencyBreakdown;
@@ -73,17 +75,26 @@ function StageDots() {
 function describe(
   latency: LatencyBreakdown | null,
   stage: LatencyStage | null | undefined,
+  noAudio: boolean,
 ): string {
   if (!latency && !stage) return "Latency: waiting for the first request";
   const parts = METRICS.map(({ key, label }) => {
     const value = latency?.[key] ?? null;
-    return hasValue(value) ? `${label} ${Math.round(value)} milliseconds` : `${label} pending`;
+    if (hasValue(value)) return `${label} ${Math.round(value)} milliseconds`;
+    // No audio came, so TTS and TOTAL will never be measured for this turn.
+    if (noAudio && (key === "tts" || key === "total")) return `${label} —, no audio`;
+    return `${label} pending`;
   });
   const active = stage ? `. In progress: ${STAGE_LABEL[stage]}` : "";
   return `Latency. ${parts.join(", ")}${active}`;
 }
 
-export function LatencyHUD({ latency, stage = null, label = "Latency" }: LatencyHUDProps) {
+export function LatencyHUD({
+  latency,
+  stage = null,
+  label = "Latency",
+  noAudio = false,
+}: LatencyHUDProps) {
   const total = latency?.total ?? null;
   const totalColor = metricColor("total", total);
   const stageCaption = stage ? STAGE_LABEL[stage] : null;
@@ -92,7 +103,7 @@ export function LatencyHUD({ latency, stage = null, label = "Latency" }: Latency
     <section
       role="status"
       aria-live="polite"
-      aria-label={describe(latency, stage)}
+      aria-label={describe(latency, stage, noAudio)}
       style={{
         display: "grid",
         gridTemplateColumns: "repeat(4, 1fr)",
@@ -145,6 +156,8 @@ export function LatencyHUD({ latency, stage = null, label = "Latency" }: Latency
               <span style={{ color: totalColor }}>{formatMs(total)}</span>
               <span style={{ color: totalColor }}>· {qualityWord(total)}</span>
             </>
+          ) : noAudio ? (
+            "No audio"
           ) : (
             "Waiting for a request"
           )}
