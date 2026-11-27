@@ -62,6 +62,8 @@ export function App() {
   const [view, setView] = useState<"agent" | "admin">("agent");
   const ttsWaitStartedRef = useRef<number | null>(null);
   const ttsFirstByteRef = useRef<boolean>(false);
+  /** The turn ended (tts_done or error) before any audio: TOTAL is "—", not pending. */
+  const [noAudio, setNoAudio] = useState(false);
   /** HUD TOTAL: end of speech → first TTS audio byte of the same turn. */
   const turnClockRef = useRef(createTurnClock());
 
@@ -130,6 +132,7 @@ export function App() {
         setStage("llm");
         // TOTAL stays pending until the first audio byte (end of speech → audio).
         setLatency({ stt: latencyMs, llm: 0, tts: 0, total: 0 });
+        setNoAudio(false);
         tts.prepare();
       },
       onAgentThinking: () => {
@@ -157,6 +160,7 @@ export function App() {
         });
         ttsWaitStartedRef.current = performance.now();
         ttsFirstByteRef.current = false;
+        setNoAudio(false);
         if (typeof tts.getProgress === "function") {
           dispatchReveal({
             type: "START",
@@ -187,10 +191,12 @@ export function App() {
       },
       onTtsDone: () => {
         setStage(null);
+        if (!ttsFirstByteRef.current) setNoAudio(true);
         tts.markDone();
       },
       onError: (code, message) => {
         inFlightTurnRef.current = null;
+        if (!ttsFirstByteRef.current) setNoAudio(true);
         dispatchAgent({ type: "FAILED" });
         dispatchReveal({ type: "COMPLETE" });
         setStage(null);
@@ -434,7 +440,7 @@ export function App() {
             </div>
           )}
 
-          <LatencyHUD latency={latency} stage={stage} />
+          <LatencyHUD latency={latency} stage={stage} noAudio={noAudio} />
           <ChatLog
             messages={messages}
             interim={interim}

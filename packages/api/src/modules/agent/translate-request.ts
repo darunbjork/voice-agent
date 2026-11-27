@@ -183,10 +183,56 @@ const FULL_PATTERNS: Array<{ re: RegExp; swap?: boolean; guard?: (phrase: string
 ];
 
 /**
+ * A spoken self-correction of the language: ", sorry, I mean Spanish",
+ * ", no, I mean Spanish", ", actually Swedish", "... oops, I meant Spanish".
+ * Punctuation, then at least one correction word, then a single language word
+ * at the end of a clause. Group 1 = the language word.
+ */
+const CORRECTION = new RegExp(
+  String.raw`(?:[,;:!?]|\.{1,3})\s*((?:(?:sorry|no|oops|wait|actually|rather)[,.!]*\s+)*(?:(?:i\s+mean|i\s+meant|make\s+(?:that|it))[,.]?\s+)?)(?:(?:in|into|to)\s+)?([A-Za-zÀ-ÿ]+)(?=\s*(?:[,;:!?.]|$))`,
+  "gi",
+);
+const CORRECTION_WORD =
+  /\b(?:sorry|no|oops|wait|actually|rather|i\s+mean|i\s+meant|make\s+(?:that|it))\b/i;
+/** Quoted text is a phrase, never a correction ("Translate 'no, I mean it' …"). */
+const QUOTED = /["“«][^"”»]*["”»]|(?<![A-Za-z])['‘][^'’]*['’](?![A-Za-z])/g;
+
+/**
+ * Removes self-corrections and returns the LAST corrected language:
+ * "Translate to French, sorry, I mean Spanish: good night" →
+ * { text: "Translate to French: good night", language: Spanish }.
+ */
+export function stripLanguageCorrections(text: string): {
+  text: string;
+  language?: TranslationLanguage;
+} {
+  const quoted = [...text.matchAll(QUOTED)].map((m) => [m.index, m.index + m[0].length]);
+  const inQuotes = (at: number) => quoted.some(([from, to]) => at >= from! && at < to!);
+  const spans: Array<{ from: number; to: number; language: TranslationLanguage }> = [];
+  for (const m of text.matchAll(CORRECTION)) {
+    const language = resolveLanguage(m[2] ?? "");
+    if (!language || !CORRECTION_WORD.test(m[1] ?? "") || inQuotes(m.index)) continue;
+    spans.push({ from: m.index, to: m.index + m[0].length, language });
+  }
+  if (spans.length === 0) return { text };
+  let out = text;
+  for (const { from, to } of [...spans].reverse()) out = out.slice(0, from) + out.slice(to);
+  return { text: out, language: spans.at(-1)!.language };
+}
+
+/**
  * Extracts the phrase and target language from a translation request.
- * Either may be missing; callers must ask rather than guess.
+ * Either may be missing; callers must ask rather than guess. A self-correction
+ * inside the utterance wins: the last stated language is the target, and the
+ * correction words are not part of the phrase.
  */
 export function parseTranslateRequest(text: string): TranslateRequest {
+  const corrected = stripLanguageCorrections(text);
+  const parsed = parseUncorrected(corrected.text);
+  return corrected.language ? { ...parsed, language: corrected.language } : parsed;
+}
+
+function parseUncorrected(text: string): TranslateRequest {
   const input = normaliseTranscript(text);
   if (!input) return {};
 
